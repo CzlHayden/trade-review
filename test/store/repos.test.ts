@@ -6,7 +6,7 @@ import {
   insertPositionSnapshot,
   allRawFills,
   allRawOrders,
-  latestPositions,
+  positionsAt,
   replaceDerived,
   allTrades,
   flagsForTrade,
@@ -71,10 +71,10 @@ test("insertPositionSnapshot round-trips every field", () => {
   const db = openTestDb();
   const p = rawPos(-20, 305.5, { symbol: "0700", currency: "HKD", account: "acc2", time: 7000 });
   insertPositionSnapshot(db, [p]);
-  expect(latestPositions(db)).toEqual([p]);
+  expect(positionsAt(db, 7000)).toEqual([p]);
 });
 
-test("latestPositions returns the latest snapshot batch per account", () => {
+test("positionsAt returns exactly the batch recorded at that time", () => {
   const db = openTestDb();
   insertPositionSnapshot(db, [rawPos(100, 10, { symbol: "AAPL", time: 1000 })]); // sync 1
   // sync 2 @2000: one coherent batch — same time — holds AAPL 150 + TSLA -20
@@ -82,33 +82,35 @@ test("latestPositions returns the latest snapshot batch per account", () => {
     rawPos(150, 10.5, { symbol: "AAPL", time: 2000 }),
     rawPos(-20, 300, { symbol: "TSLA", time: 2000 }),
   ]);
-  const latest = latestPositions(db);
-  const aapl = latest.find((p) => p.symbol === "AAPL")!;
-  expect(aapl.qty).toBe(150); // the 2000 batch, not the 1000 one
-  expect(aapl.avgCost).toBe(10.5);
-  expect(latest.find((p) => p.symbol === "TSLA")!.qty).toBe(-20);
+  const batch = positionsAt(db, 2000);
+  expect(batch.map((p) => p.symbol)).toEqual(["AAPL", "TSLA"]); // only the 2000 batch
+  expect(batch.find((p) => p.symbol === "AAPL")!.qty).toBe(150);
+  expect(batch.find((p) => p.symbol === "AAPL")!.avgCost).toBe(10.5);
+  expect(positionsAt(db, 1000).map((p) => p.symbol)).toEqual(["AAPL"]); // the older batch
 });
 
-test("latestPositions drops symbols absent from the latest batch (closed positions aren't phantom-held)", () => {
+test("positionsAt of an all-flat snapshot is empty — no stale phantom positions (P1)", () => {
   const db = openTestDb();
   insertPositionSnapshot(db, [rawPos(100, 10, { symbol: "AAPL", time: 1000 })]); // sync 1: held AAPL
-  insertPositionSnapshot(db, [rawPos(50, 300, { symbol: "TSLA", time: 2000 })]); // sync 2: AAPL closed
-  expect(latestPositions(db).map((p) => p.symbol)).toEqual(["TSLA"]); // AAPL gone, not stale
+  insertPositionSnapshot(db, []); // sync 2 @3000: account went flat — zero positions
+  // The caller (sync) knows the snapshot time it just wrote and asks for exactly that instant.
+  expect(positionsAt(db, 3000)).toEqual([]); // flat, not the stale AAPL batch
+  expect(positionsAt(db, 1000).map((p) => p.symbol)).toEqual(["AAPL"]); // history still queryable
 });
 
 test("insertPositionSnapshot re-inserting the same (account,symbol,time) replaces, not duplicates", () => {
   const db = openTestDb();
   insertPositionSnapshot(db, [rawPos(100, 10, { time: 1000 })]);
   insertPositionSnapshot(db, [rawPos(120, 10, { time: 1000 })]); // same key
-  expect(latestPositions(db)).toHaveLength(1);
-  expect(latestPositions(db)[0]!.qty).toBe(120);
+  expect(positionsAt(db, 1000)).toHaveLength(1);
+  expect(positionsAt(db, 1000)[0]!.qty).toBe(120);
 });
 
 test("empty reads return empty arrays", () => {
   const db = openTestDb();
   expect(allRawFills(db)).toEqual([]);
   expect(allRawOrders(db)).toEqual([]);
-  expect(latestPositions(db)).toEqual([]);
+  expect(positionsAt(db, 1000)).toEqual([]);
 });
 
 function tradeFixture(over: Partial<Trade> = {}): Trade {

@@ -132,7 +132,7 @@ import {
   insertPositionSnapshot,
   allRawFills,
   allRawOrders,
-  latestPositions,
+  positionsAt,
 } from "../../src/store/repos";
 
 test("upsertRawFills inserts and reads back, ordered by time", () => {
@@ -167,33 +167,48 @@ test("upsertRawOrders round-trips nullable price/triggerPrice/updateTime", () =>
   expect(rows[1]!.updateTime).toBe(2000);
 });
 
-test("insertPositionSnapshot keeps one row per (account,symbol,time); latestPositions returns newest per symbol", () => {
+test("positionsAt returns exactly the batch recorded at that time", () => {
+  const db = openTestDb();
+  insertPositionSnapshot(db, [rawPos(100, 10, { symbol: "AAPL", time: 1000 })]); // sync 1
+  insertPositionSnapshot(db, [
+    rawPos(150, 10.5, { symbol: "AAPL", time: 2000 }),
+    rawPos(-20, 300, { symbol: "TSLA", time: 2000 }),
+  ]); // sync 2 — one coherent batch at the same time
+  const batch = positionsAt(db, 2000);
+  expect(batch.map((p) => p.symbol)).toEqual(["AAPL", "TSLA"]);
+  expect(batch.find((p) => p.symbol === "AAPL")!.qty).toBe(150);
+  expect(positionsAt(db, 1000).map((p) => p.symbol)).toEqual(["AAPL"]);
+});
+
+test("positionsAt of an all-flat snapshot is empty — no stale phantom positions", () => {
   const db = openTestDb();
   insertPositionSnapshot(db, [rawPos(100, 10, { symbol: "AAPL", time: 1000 })]);
-  insertPositionSnapshot(db, [rawPos(150, 10.5, { symbol: "AAPL", time: 2000 })]); // newer snapshot
-  insertPositionSnapshot(db, [rawPos(-20, 300, { symbol: "TSLA", time: 1500 })]);
-  const latest = latestPositions(db);
-  const aapl = latest.find((p) => p.symbol === "AAPL")!;
-  expect(aapl.qty).toBe(150); // the 2000 snapshot, not the 1000 one
-  expect(aapl.avgCost).toBe(10.5);
-  expect(latest.find((p) => p.symbol === "TSLA")!.qty).toBe(-20);
+  insertPositionSnapshot(db, []); // account went flat — zero positions
+  expect(positionsAt(db, 3000)).toEqual([]); // caller passes the snapshot time it just wrote
 });
 
 test("insertPositionSnapshot re-inserting the same (account,symbol,time) replaces, not duplicates", () => {
   const db = openTestDb();
   insertPositionSnapshot(db, [rawPos(100, 10, { time: 1000 })]);
   insertPositionSnapshot(db, [rawPos(120, 10, { time: 1000 })]); // same key
-  expect(latestPositions(db)).toHaveLength(1);
-  expect(latestPositions(db)[0]!.qty).toBe(120);
+  expect(positionsAt(db, 1000)).toHaveLength(1);
+  expect(positionsAt(db, 1000)[0]!.qty).toBe(120);
 });
 
 test("empty reads return empty arrays", () => {
   const db = openTestDb();
   expect(allRawFills(db)).toEqual([]);
   expect(allRawOrders(db)).toEqual([]);
-  expect(latestPositions(db)).toEqual([]);
+  expect(positionsAt(db, 1000)).toEqual([]);
 });
 ```
+
+> **Note (review-driven):** `latestPositions()` in an earlier draft inferred the current
+> snapshot via `MAX(time)`, which cannot represent an all-flat account (an empty snapshot writes
+> no rows, so the query returns the previous non-empty batch). Codex/Fable flagged this; the
+> shipped API is `positionsAt(db, snapshotTime)` — the caller (sync) owns the timestamp, so a flat
+> account correctly yields `[]`. Task 2/3 tests were also hardened with full-object round-trip
+> equality and a `replaceDerived` rollback-atomicity case.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -289,13 +304,15 @@ export function insertPositionSnapshot(db: Database, rows: RawPosition[]): void 
   })();
 }
 
-/** The most recent snapshot per (account, symbol). */
-export function latestPositions(db: Database): RawPosition[] {
+/** Position rows recorded at exactly `snapshotTime` — the batch a sync wrote at that instant.
+ * The caller owns the timestamp (also persisted in sync_state), so an all-flat account yields
+ * `[]` rather than a stale earlier batch. Inferring "the latest snapshot" from the rows is
+ * unsound: an empty snapshot writes no rows, so MAX(time) would return the prior non-empty batch. */
+export function positionsAt(db: Database, snapshotTime: number): RawPosition[] {
   const rows = db
-    .query(`SELECT account, symbol, qty, avg_cost, currency, time FROM raw_positions p
-            WHERE time = (SELECT MAX(time) FROM raw_positions q WHERE q.account = p.account AND q.symbol = p.symbol)
-            ORDER BY account ASC, symbol ASC`)
-    .all() as any[];
+    .query(`SELECT account, symbol, qty, avg_cost, currency, time FROM raw_positions
+            WHERE time = ? ORDER BY account ASC, symbol ASC`)
+    .all(snapshotTime) as any[];
   return rows.map((r) => ({
     account: r.account, symbol: r.symbol, qty: r.qty, avgCost: r.avg_cost,
     currency: r.currency, time: r.time,

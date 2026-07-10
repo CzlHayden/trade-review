@@ -82,15 +82,16 @@ export function insertPositionSnapshot(db: Database, rows: RawPosition[]): void 
   })();
 }
 
-/** The latest snapshot *batch* per account — the rows from that account's most recent sync.
- * A snapshot contains only currently-held symbols, so taking the latest batch (not the latest
- * time per symbol) correctly drops positions that were closed and thus absent from a later sync. */
-export function latestPositions(db: Database): RawPosition[] {
+/** Position rows recorded at exactly `snapshotTime` — the batch a sync wrote at that instant.
+ * The caller owns the timestamp (from its sync clock, also persisted in sync_state), so an
+ * all-flat account correctly yields `[]` rather than a stale earlier batch. Deriving "the latest
+ * snapshot" from the rows themselves is unsound: an empty snapshot writes no rows, so MAX(time)
+ * would silently return the previous, non-empty batch. */
+export function positionsAt(db: Database, snapshotTime: number): RawPosition[] {
   const rows = db
-    .query(`SELECT account, symbol, qty, avg_cost, currency, time FROM raw_positions p
-            WHERE time = (SELECT MAX(time) FROM raw_positions q WHERE q.account = p.account)
-            ORDER BY account ASC, symbol ASC`)
-    .all() as any[];
+    .query(`SELECT account, symbol, qty, avg_cost, currency, time FROM raw_positions
+            WHERE time = ? ORDER BY account ASC, symbol ASC`)
+    .all(snapshotTime) as any[];
   return rows.map((r) => ({
     account: r.account, symbol: r.symbol, qty: r.qty, avgCost: r.avg_cost,
     currency: r.currency, time: r.time,
