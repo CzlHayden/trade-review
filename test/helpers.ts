@@ -1,4 +1,34 @@
-import type { RawFill, RawOrder, OrderType, SeedPosition, Side, Candle } from "../src/domain/types";
+import { Database } from "bun:sqlite";
+import { runMigrations } from "../src/store/migrations";
+import type {
+  RawFill,
+  RawOrder,
+  OrderType,
+  RawPosition,
+  SeedPosition,
+  Side,
+  Candle,
+} from "../src/domain/types";
+
+/** An in-memory DB with the full schema migrated — the base for every store test. */
+export function openTestDb(): Database {
+  const db = new Database(":memory:");
+  db.run("PRAGMA foreign_keys = ON;");
+  runMigrations(db);
+  return db;
+}
+
+/** Concise position-snapshot builder. `qty` is signed (+long / -short). */
+export function rawPos(qty: number, avgCost: number, over: Partial<RawPosition> = {}): RawPosition {
+  return {
+    account: over.account ?? "acc1",
+    symbol: over.symbol ?? "AAPL",
+    qty,
+    avgCost,
+    currency: over.currency ?? "USD",
+    time: over.time ?? 1000,
+  };
+}
 
 let seq = 0;
 /** Concise fill builder. time defaults to a monotonically increasing minute. */
