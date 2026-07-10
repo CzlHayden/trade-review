@@ -42,6 +42,7 @@ The tool is for **self-review**, not execution. It never places orders. v1 ships
 - **Open-positions view** (current holdings + open risk).
 - Transparent rule-based mistake flags (defaults hardcoded + config file; no settings UI in v1).
 - Ship as a **single compiled binary** (Bun) that opens the app in the browser.
+- **Self-update** via GitHub Releases (check on startup → download → swap binary). Free; see §14.
 - **Never lose user-written data across updates** (stable DB location + migrations + pre-migration backup).
 
 ### Non-goals (v1) — deliberately cut for simplicity
@@ -52,13 +53,12 @@ The tool is for **self-review**, not execution. It never places orders. v1 ships
 - **Single candle source** only (no dual-source fallback).
 - **No stop-move history / confirm-unlink UI** (infer `effective_stop` + manual override only).
 - **No settings UI** (hardcoded defaults + config file).
-- **No self-updating binary** (manual AirDrop/Drive hand-off).
 - No auto-handling of splits/corporate actions (detect + flag only — §6).
 - Journaling deferred: daily entries, watchlist-vs-trades comparison, formal thesis/campaign objects, setup rule-checklists + adherence scoring.
 
 ### Future (v2+)
 - MCP server wrapping the store + analytics for Claude queries; AI-generated reviews.
-- Stop-move history + management UI; settings page; GitHub-Releases auto-update; Tauri desktop packaging.
+- Stop-move history + management UI; settings page; Tauri desktop packaging; real code-signing (removes macOS Gatekeeper friction).
 - Daily journal, watchlist-vs-trades comparison, thesis/campaign objects, setup rule-checklists + adherence, FUTU K-line as a second candle source, options metrics.
 
 ---
@@ -195,6 +195,8 @@ Rendered with **Lightweight Charts** (we supply the data):
 - **Price lines:** `avg_entry`, `effective_stop`, `effective_tp`.
 - Time range padded around the trade window (also the window used for MAE/MFE).
 
+**Renderer vs. data (avoid confusion):** the **renderer** is Lightweight Charts (TradingView's open-source engine — we draw our own chart so we can overlay *your* fills/stops). The **data** is OHLC candles from a **single source** in v1. These are independent choices. The TradingView **iframe widget** is deliberately *not* used: it's a sealed embed showing TV's own data and cannot draw your trades on it — losing the overlay would defeat the review chart's purpose.
+
 ---
 
 ## 9. Rule engine (`rule-engine`, pure)
@@ -264,8 +266,11 @@ Triggered by a **"Sync now"** button and optionally on startup. Idempotent; tran
 - On launch, `app.main()`: ensure data dir → **backup DB** → run **migrations** → start localhost server → open browser.
 - Brother's total setup: **(1)** download & log into **OpenD** (FUTU's free gateway, one-time, documented with screenshots — note it needs periodic re-login/2FA), **(2)** double-click the binary. No Bun/Node install.
 
-### Updates
-- **v1:** manual hand-off (AirDrop/Drive), replace the old binary. (Self-update deferred.)
+### Updates (self-update, v1)
+- On startup the app checks the **GitHub Releases API** for a newer version; if found, it notifies, downloads the new binary, and swaps itself (relaunch). Free — no server/paid service.
+- **Repo:** public repo (simple public download URLs), **private data** — trades/journal live only in the local DB, never in the repo.
+- **macOS Gatekeeper:** downloaded unsigned binaries are quarantined; first launch/update needs a right-click-open or quarantine-strip step — documented in setup. Real code-signing (removes this) is deferred (needs a paid Apple Developer account).
+- Manual hand-off (AirDrop) remains the fallback if a self-update fails.
 
 ### Data safety across updates (hard requirement)
 - DB lives in a **stable user-data folder** (`~/Library/Application Support/TradeReview/` on macOS; platform equivalent on Windows), **never** next to the binary.
@@ -283,7 +288,7 @@ Analogy: the binary is the *program*, the DB is the *save file*; updating the pr
 3. Pure core: `trade-builder` → `stop-inference` → `mae-mfe` → `rule-engine` → `analytics` (all TDD).
 4. `sync` orchestration against fixtures, then live OpenD.
 5. `api` + `web`: trades list → trade detail + chart → dashboard → open positions → weekly journal.
-6. Packaging + setup docs.
+6. Packaging + **self-update** (GitHub Releases check/download/swap) + setup docs.
 
 ---
 
@@ -294,4 +299,5 @@ Analogy: the binary is the *program*, the DB is the *save file*; updating the pr
 3. **Intraday candle depth** — free sources cap intraday history (~60 days of 1-min); acceptable for v1?
 4. **Localhost port + browser-open behavior** across macOS/Windows.
 5. **Config-file location/format** for rule thresholds (since there's no settings UI in v1).
+6. **Release repo** — confirm public repo (simple free self-update) vs. private (needs embedded token).
 ```
