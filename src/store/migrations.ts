@@ -28,6 +28,40 @@ export const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
       );
     `);
   },
+  // v2 — enrichment columns on trades + raw orders/positions + sync state
+  (db) => {
+    for (const col of [
+      "effective_stop REAL",
+      "effective_tp REAL",
+      "risk REAL",
+      "r_multiple REAL",
+      "mae REAL",
+      "mfe REAL",
+    ]) {
+      db.run(`ALTER TABLE trades ADD COLUMN ${col};`);
+    }
+    db.run(`
+      CREATE TABLE raw_orders (
+        id TEXT PRIMARY KEY, symbol TEXT NOT NULL, side TEXT NOT NULL, type TEXT NOT NULL,
+        qty REAL NOT NULL, price REAL, trigger_price REAL,
+        status TEXT NOT NULL, create_time INTEGER NOT NULL, account TEXT NOT NULL
+      );
+    `);
+    db.run(`
+      CREATE TABLE raw_positions (
+        account TEXT NOT NULL, symbol TEXT NOT NULL, qty REAL NOT NULL,
+        avg_cost REAL NOT NULL, currency TEXT NOT NULL, time INTEGER NOT NULL,
+        PRIMARY KEY (account, symbol, time)
+      );
+    `);
+    db.run(`
+      CREATE TABLE sync_state (
+        account TEXT NOT NULL, market TEXT NOT NULL,
+        last_synced_time INTEGER, coverage_start INTEGER,
+        PRIMARY KEY (account, market)
+      );
+    `);
+  },
 ];
 
 export function currentVersion(db: Database): number {
