@@ -77,6 +77,56 @@ export const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
       );
     `);
   },
+  // v4 — user-written journaling (orphan-tolerant: NO FK to trades, which is rebuilt every sync)
+  //      + candle cache (immutable closed bars) with range-coverage bookkeeping.
+  (db) => {
+    db.run(`
+      CREATE TABLE journal (
+        trade_id TEXT PRIMARY KEY,
+        thesis TEXT, emotion TEXT,
+        conviction INTEGER, rating INTEGER,
+        notes TEXT, manual_stop REAL, setup TEXT,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    db.run(`
+      CREATE TABLE journal_tags (
+        trade_id TEXT NOT NULL, tag TEXT NOT NULL,
+        PRIMARY KEY (trade_id, tag)
+      );
+    `);
+    db.run(`
+      CREATE TABLE journal_entries (
+        id TEXT PRIMARY KEY,            -- ISO week key, e.g. "2026-W28"
+        period_start INTEGER NOT NULL,  -- epoch ms, inclusive
+        period_end INTEGER NOT NULL,    -- epoch ms, exclusive
+        market_read TEXT, traded_vs_plan TEXT,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    db.run(`
+      CREATE TABLE watchlist_items (
+        entry_id TEXT NOT NULL, symbol TEXT NOT NULL,
+        note TEXT, key_level REAL,
+        PRIMARY KEY (entry_id, symbol)
+      );
+    `);
+    db.run(`
+      CREATE TABLE candles_cache (
+        symbol TEXT NOT NULL, res_ms INTEGER NOT NULL, time INTEGER NOT NULL,
+        open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL, close REAL NOT NULL,
+        volume REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (symbol, res_ms, time)
+      );
+    `);
+    db.run(`
+      CREATE TABLE candle_coverage (
+        symbol TEXT NOT NULL, res_ms INTEGER NOT NULL,
+        from_ms INTEGER NOT NULL, to_ms INTEGER NOT NULL, fetched_at INTEGER NOT NULL,
+        PRIMARY KEY (symbol, res_ms)
+      );
+    `);
+  },
 ];
 
 export function currentVersion(db: Database): number {
