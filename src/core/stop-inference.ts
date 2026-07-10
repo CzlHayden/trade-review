@@ -3,56 +3,71 @@ import type { RawOrder, StopInfo, Trade } from "../domain/types";
 const STOP_TYPES = new Set(["STOP", "STOP_LIMIT", "TRAILING_STOP"]);
 const EPS = 1e-9;
 
+/** Substrings of FUTU statuses meaning the order never rested in the book — not a real stop. */
+const DEAD_STATUS = ["FAIL", "REJECT", "DISABLED", "DELETED", "TIMEOUT", "EXPIRED", "INVALID"];
+
+function isDead(status: string): boolean {
+  const s = status.toUpperCase();
+  return DEAD_STATUS.some((d) => s.includes(d));
+}
+
 /** The side of an order that would REDUCE this trade's position. */
 function closingSide(trade: Trade): "BUY" | "SELL" {
   return trade.direction === "LONG" ? "SELL" : "BUY";
 }
 
-/** Is the order within the trade's open window and on the same instrument/account/side/qty? */
+/** Recency of an order — a modified stop bumps updateTime but not createTime. */
+function orderTime(o: RawOrder): number {
+  return Math.max(o.createTime, o.updateTime ?? o.createTime);
+}
+
+/** An order that plausibly protected this trade: same instrument/account, closing side,
+ * not dead-on-arrival, size within the position, and live during the trade's window. */
 function isProtective(trade: Trade, o: RawOrder): boolean {
   if (o.account !== trade.account || o.symbol !== trade.symbol) return false;
   if (o.side !== closingSide(trade)) return false;
+  if (isDead(o.status)) return false;
   if (o.qty > trade.maxQty + EPS) return false;
-  if (o.createTime < trade.openTime) return false;
+  if (orderTime(o) < trade.openTime) return false;
   if (trade.closeTime !== null && o.createTime > trade.closeTime) return false;
   return true;
 }
 
-/** Latest-by-createTime value among matching orders, or null. */
-function latest(orders: RawOrder[], pick: (o: RawOrder) => number | null): number | null {
-  let best: RawOrder | null = null;
-  let bestVal: number | null = null;
-  for (const o of orders) {
-    const v = pick(o);
-    if (v === null) continue;
-    if (best === null || o.createTime > best.createTime) {
-      best = o;
-      bestVal = v;
-    }
-  }
-  return bestVal;
+function byTime(a: RawOrder, b: RawOrder): number {
+  return orderTime(a) - orderTime(b) || a.id.localeCompare(b.id); // stable tie-break
 }
 
 export function inferStops(trade: Trade, orders: RawOrder[]): StopInfo {
-  const candidates = orders.filter((o) => isProtective(trade, o));
+  const protective = orders.filter((o) => isProtective(trade, o));
 
-  // Stop-loss: a stop-type order with trigger on the LOSS side of entry.
-  const stopVal = latest(candidates, (o) => {
-    if (!STOP_TYPES.has(o.type) || o.triggerPrice === null) return null;
-    const onLossSide =
-      trade.direction === "LONG"
-        ? o.triggerPrice < trade.avgEntry
-        : o.triggerPrice > trade.avgEntry;
-    return onLossSide ? o.triggerPrice : null;
-  });
+  // Any closing-side stop-type order is a protective stop — regardless of whether the trigger
+  // is below entry (a loss stop) or at/above it (breakeven or trailed-into-profit stop).
+  const stops = protective
+    .filter((o) => STOP_TYPES.has(o.type) && o.triggerPrice !== null)
+    .sort(byTime);
 
-  // Take-profit: a limit order with price on the PROFIT side of entry.
-  const tpVal = latest(candidates, (o) => {
-    if (o.type !== "LIMIT" || o.price === null) return null;
-    const onProfitSide =
-      trade.direction === "LONG" ? o.price > trade.avgEntry : o.price < trade.avgEntry;
-    return onProfitSide ? o.price : null;
-  });
+  // Take-profit: a closing-side limit resting on the profit side of entry.
+  const tps = protective
+    .filter(
+      (o) =>
+        o.type === "LIMIT" &&
+        o.price !== null &&
+        (trade.direction === "LONG" ? o.price > trade.avgEntry : o.price < trade.avgEntry),
+    )
+    .sort(byTime);
 
-  return { effectiveStop: stopVal, effectiveTp: tpVal };
+  const initial = stops[0] ?? null;
+  const effective = stops[stops.length - 1] ?? null;
+  const tp = tps[tps.length - 1] ?? null;
+
+  return {
+    initialStop: initial?.triggerPrice ?? null,
+    effectiveStop: effective?.triggerPrice ?? null,
+    effectiveTp: tp?.price ?? null,
+    stopOrderId: effective?.id ?? null,
+    stopQty: effective?.qty ?? null,
+    receipt: effective
+      ? `${effective.side} ${effective.type} ${effective.qty} @ ${effective.triggerPrice} (order ${effective.id})`
+      : null,
+  };
 }

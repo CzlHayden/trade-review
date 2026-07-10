@@ -20,13 +20,61 @@ test("detects a take-profit limit above entry for a long", () => {
   expect(inferStops(t, orders).effectiveTp).toBe(13);
 });
 
-test("latest matching stop wins (stop was trailed up)", () => {
+test("short: take-profit is a BUY limit below entry", () => {
+  const short = buildTrades([fill("SELL", 100, 20, { time: 60_000 })])[0]!;
+  const orders = [order("BUY", "LIMIT", 100, { price: 18, createTime: 120_000 })];
+  expect(inferStops(short, orders).effectiveTp).toBe(18);
+});
+
+test("initialStop is the earliest, effectiveStop the latest (stop trailed up)", () => {
   const t = longTrade();
   const orders = [
     order("SELL", "STOP", 100, { triggerPrice: 9, createTime: 120_000 }),
     order("SELL", "STOP", 100, { triggerPrice: 9.5, createTime: 180_000 }),
   ];
-  expect(inferStops(t, orders).effectiveStop).toBe(9.5);
+  const s = inferStops(t, orders);
+  expect(s.initialStop).toBe(9); // planned risk
+  expect(s.effectiveStop).toBe(9.5); // what was protecting at the end
+});
+
+test("a stop trailed to/above entry is still captured (breakeven / profit stop)", () => {
+  // Previously wrongly discarded as 'wrong price side'. A closing-side stop is a stop.
+  const t = longTrade();
+  const orders = [order("SELL", "STOP", 100, { triggerPrice: 11, createTime: 120_000 })];
+  expect(inferStops(t, orders).effectiveStop).toBe(11);
+});
+
+test("a modified stop's updateTime (not createTime) drives recency", () => {
+  const t = longTrade();
+  const orders = [
+    order("SELL", "STOP", 100, { id: "new", triggerPrice: 9.5, createTime: 200_000 }),
+    order("SELL", "STOP", 100, {
+      id: "moved",
+      triggerPrice: 9.8,
+      createTime: 120_000,
+      updateTime: 300_000,
+    }),
+  ];
+  // "moved" was created earlier but modified last → it is the effective stop.
+  expect(inferStops(t, orders).effectiveStop).toBe(9.8);
+});
+
+test("ignores a rejected/failed stop order", () => {
+  const t = longTrade();
+  const orders = [
+    order("SELL", "STOP", 100, { triggerPrice: 9, createTime: 120_000, status: "FAILED" }),
+  ];
+  expect(inferStops(t, orders).effectiveStop).toBeNull();
+});
+
+test("a cancelled stop still counts (reveals the intended risk level)", () => {
+  // v1 choice: a placed-then-cancelled stop tells us the trader's planned risk, which is
+  // exactly what a review wants (e.g. 'you cancelled your stop and it ran against you').
+  const t = longTrade();
+  const orders = [
+    order("SELL", "STOP", 100, { triggerPrice: 9, createTime: 120_000, status: "CANCELLED_ALL" }),
+  ];
+  expect(inferStops(t, orders).effectiveStop).toBe(9);
 });
 
 test("ignores a BUY stop (wrong side for a long)", () => {
@@ -56,19 +104,32 @@ test("ignores an order placed before the trade opened", () => {
   expect(inferStops(t, orders).effectiveStop).toBeNull();
 });
 
-test("a SELL STOP above entry is not a stop-loss (wrong price side)", () => {
-  const t = longTrade();
-  const orders = [order("SELL", "STOP", 100, { triggerPrice: 11, createTime: 120_000 })];
-  expect(inferStops(t, orders).effectiveStop).toBeNull();
-});
-
 test("short trade: BUY stop above entry is the stop-loss", () => {
   const short = buildTrades([fill("SELL", 100, 20, { time: 60_000 })])[0]!;
   const orders = [order("BUY", "STOP", 100, { triggerPrice: 22, createTime: 120_000 })];
   expect(inferStops(short, orders).effectiveStop).toBe(22);
 });
 
-test("no orders → null stop and tp", () => {
+test("populates provenance (order id, qty, receipt) for the effective stop", () => {
   const t = longTrade();
-  expect(inferStops(t, [])).toEqual({ effectiveStop: null, effectiveTp: null });
+  const orders = [
+    order("SELL", "STOP", 100, { id: "stopX", triggerPrice: 9, createTime: 120_000 }),
+  ];
+  const s = inferStops(t, orders);
+  expect(s.stopOrderId).toBe("stopX");
+  expect(s.stopQty).toBe(100);
+  expect(s.receipt).toContain("stopX");
+  expect(s.receipt).toContain("@ 9");
+});
+
+test("no orders → all-null StopInfo", () => {
+  const t = longTrade();
+  expect(inferStops(t, [])).toEqual({
+    initialStop: null,
+    effectiveStop: null,
+    effectiveTp: null,
+    stopOrderId: null,
+    stopQty: null,
+    receipt: null,
+  });
 });
