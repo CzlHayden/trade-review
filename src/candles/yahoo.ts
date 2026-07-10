@@ -7,11 +7,13 @@ import type { CandleSource } from "../domain/ports";
 
 /** Domain symbol (`"<MKT>.<code>"`) → Yahoo symbol. US + HK only in v1. */
 export function yahooSymbol(symbol: string): string {
-  const [market, code] = symbol.split(".");
-  if (market === "US") return code!;
+  const dot = symbol.indexOf(".");
+  const market = symbol.slice(0, dot);
+  const code = symbol.slice(dot + 1); // split on the FIRST dot only — code may contain dots (BRK.B)
+  if (market === "US") return code.replace(/\./g, "-"); // Yahoo class shares: BRK.B → BRK-B
   if (market === "HK") {
     // FUTU HK codes are 5 digits ("00700"); Yahoo wants 4 ("0700.HK").
-    return `${code!.replace(/^0(\d{4})$/, "$1")}.HK`;
+    return `${code.replace(/^0(\d{4})$/, "$1")}.HK`;
   }
   throw new Error(`Unsupported market for candles: ${symbol}`);
 }

@@ -17,6 +17,22 @@ test("futuSymbol / currencyForMarket / marketName normalize by market", () => {
   expect(marketName(2)).toBe("US");
 });
 
+test("marketName is unique per market — HK and HKCC don't share a sync cursor key", () => {
+  expect(marketName(1)).toBe("HK");
+  expect(marketName(4)).toBe("HKCC"); // must differ from HK, else sync_state collides
+  expect(marketName(2)).toBe("US");
+});
+
+test("mappers treat SDK default-zero market/cost as absent (protobufjs quirk)", () => {
+  // Only secMarket present (trdMarket omitted → arrives as 0): must fall back, not map to UNKNOWN.
+  const f = mapFill({ trdSide: 1, fillID: 1, orderID: 1, code: "AAPL", qty: 1, price: 1, createTimestamp: 1, trdMarket: 0, secMarket: 2 }, "a");
+  expect(f.symbol).toBe("US.AAPL");
+  expect(f.currency).toBe("USD");
+  // averageCostPrice omitted (0) → fall back to dilutedCostPrice.
+  const p = mapPosition({ positionSide: 0, code: "AAPL", qty: 1, averageCostPrice: 0, dilutedCostPrice: 7, currency: 2, trdMarket: 2 }, "a", 1);
+  expect(p.avgCost).toBe(7);
+});
+
 test("mapFill maps a US buy fill (fee defaults to 0, currency from market, ms from timestamp)", () => {
   const f = mapFill(
     { trdSide: 1, fillID: 123, orderID: 456, code: "AAPL", qty: 100, price: 10.5, createTimestamp: 1_700_000_000, trdMarket: 2 },

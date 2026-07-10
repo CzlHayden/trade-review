@@ -7,6 +7,10 @@ test("yahooSymbol maps US and HK", () => {
   expect(yahooSymbol("HK.00700")).toBe("0700.HK");
 });
 
+test("yahooSymbol handles US class shares with a dot in the code (BRK.B → BRK-B)", () => {
+  expect(yahooSymbol("US.BRK.B")).toBe("BRK-B"); // split on first dot only, dot → dash
+});
+
 test("yahooSymbol throws on unsupported market", () => {
   expect(() => yahooSymbol("CN.600000")).toThrow();
 });

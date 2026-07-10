@@ -18,6 +18,12 @@ const STOP_TYPES = new Set<OrderType>(["STOP", "STOP_LIMIT", "TRAILING_STOP"]);
 const MARKET_PREFIX: Record<number, string> = {
   1: "HK", 2: "US", 3: "CN", 4: "HK", 6: "SG", 8: "AU", 15: "JP", 111: "MY", 112: "CA",
 };
+// Distinct from MARKET_PREFIX: used as the sync_state cursor key, so it must be UNIQUE per market
+// (HK=1 and HKCC=4 share the "HK" symbol prefix but must not share a sync cursor, or the second
+// market inherits the first's lastSyncedTime and skips its history).
+const MARKET_NAME: Record<number, string> = {
+  1: "HK", 2: "US", 3: "CN", 4: "HKCC", 6: "SG", 8: "AU", 15: "JP", 111: "MY", 112: "CA",
+};
 const MARKET_CURRENCY: Record<number, string> = {
   1: "HKD", 2: "USD", 3: "CNH", 4: "HKD", 6: "SGD", 8: "AUD", 15: "JPY", 111: "MYR", 112: "CAD",
 };
@@ -30,9 +36,9 @@ export function futuSymbol(code: string, market: number): string {
   return `${MARKET_PREFIX[market] ?? "UNKNOWN"}.${code}`;
 }
 
-/** Human market name used as the sync_state `market` key (e.g. 2 → "US"). */
+/** Unique market key used for the sync_state cursor (e.g. 2 → "US", 4 → "HKCC"). */
 export function marketName(market: number): string {
-  return MARKET_PREFIX[market] ?? "UNKNOWN";
+  return MARKET_NAME[market] ?? `MKT_${market}`;
 }
 
 export function currencyForMarket(market: number): string {
@@ -98,8 +104,14 @@ export function orderStatusName(orderStatus: number): string {
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+// protobufjs surfaces omitted optional numeric fields as their proto default 0 (not undefined),
+// so `??` won't fall back. Treat 0/absent as "missing" and prefer trdMarket, then secMarket.
+function marketOf(raw: any): number {
+  return raw.trdMarket || raw.secMarket || 0;
+}
+
 export function mapFill(raw: any, account: string): RawFill {
-  const market = raw.trdMarket ?? raw.secMarket;
+  const market = marketOf(raw);
   return {
     id: String(raw.fillID),
     orderId: String(raw.orderID),
@@ -115,7 +127,7 @@ export function mapFill(raw: any, account: string): RawFill {
 }
 
 export function mapOrder(raw: any, account: string): RawOrder {
-  const market = raw.trdMarket ?? raw.secMarket;
+  const market = marketOf(raw);
   const type = orderTypeFrom(raw.orderType);
   const triggerPrice = STOP_TYPES.has(type) ? (raw.auxPrice ?? null) : null;
   // Stop-market and market orders have no resting limit price; stop-limit keeps `price`.
@@ -139,9 +151,10 @@ export function mapOrder(raw: any, account: string): RawOrder {
 }
 
 export function mapPosition(raw: any, account: string, snapshotMs: number): RawPosition {
-  const market = raw.trdMarket ?? raw.secMarket;
+  const market = marketOf(raw);
   const qtyAbs = raw.qty;
-  const avgCost = raw.averageCostPrice ?? raw.dilutedCostPrice ?? raw.costPrice ?? 0;
+  // `||` (not `??`): omitted cost fields arrive as 0 from protobufjs; a real cost is never 0.
+  const avgCost = raw.averageCostPrice || raw.dilutedCostPrice || raw.costPrice || 0;
   return {
     account,
     symbol: futuSymbol(raw.code, market),
