@@ -1,4 +1,4 @@
-import type { RawFill, RawOrder, OrderType, SeedPosition, Side } from "../src/domain/types";
+import type { RawFill, RawOrder, OrderType, SeedPosition, Side, Candle } from "../src/domain/types";
 
 let seq = 0;
 /** Concise fill builder. time defaults to a monotonically increasing minute. */
@@ -49,5 +49,16 @@ export function order(
     status: over.status ?? "CANCELLED_ALL",
     createTime: over.createTime ?? oseq * 60_000,
     account: over.account ?? "acc1",
+  };
+}
+
+export function candle(time: number, low: number, high: number, over: Partial<Candle> = {}): Candle {
+  return {
+    time,
+    open: over.open ?? (low + high) / 2,
+    high,
+    low,
+    close: over.close ?? (low + high) / 2,
+    volume: over.volume ?? 1000,
   };
 }
