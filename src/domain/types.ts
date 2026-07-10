@@ -96,3 +96,63 @@ export interface StopInfo {
   stopQty: number | null; // qty that stop covered (may be < position size)
   receipt: string | null; // plain-English explanation of the matched stop (spec §6)
 }
+
+/** A fired mistake-rule result, with a plain-English reason. */
+export interface Flag {
+  ruleId: string;
+  severity: "info" | "warn";
+  reason: string;
+}
+
+/** Tunable thresholds + per-rule on/off. Loaded from the config file (no settings UI in v1). */
+export interface RuleConfig {
+  cutWinnerR: number; // flag a winner exited for less than this R (default 1)
+  oversizedMult: number; // flag risk above this multiple of recent-average risk (default 1.5)
+  roundTripR: number; // flag a give-back when peak gain reached this many R (default 1)
+  revengeMinutes: number; // flag a new trade opened within this many minutes of a losing exit (default 30)
+  enabled: Record<string, boolean>; // ruleId → enabled; missing key = enabled
+}
+
+export const DEFAULT_RULE_CONFIG: RuleConfig = {
+  cutWinnerR: 1,
+  oversizedMult: 1.5,
+  roundTripR: 1,
+  revengeMinutes: 30,
+  enabled: {},
+};
+
+/** Everything a rule may need beyond the trade itself. */
+export interface RuleContext {
+  fills: RawFill[]; // the fills composing THIS trade
+  candles: Candle[]; // candles overlapping the trade window
+  resolution: number; // candle bar duration (ms)
+  recentClosedTrades: Trade[]; // prior closed trades in the same account (for averages + timing)
+}
+
+/** Per-currency aggregate stats (P&L is never summed across currencies). */
+export interface CurrencyStats {
+  currency: string;
+  netPnl: number;
+  tradeCount: number;
+  winRate: number; // 0..1
+  avgWin: number;
+  avgLoss: number; // positive magnitude of the average loss
+  expectancy: number; // winRate*avgWin - lossRate*avgLoss
+  avgR: number | null; // mean rMultiple over trades that have one
+  avgMae: number | null;
+  avgMfe: number | null;
+  equityCurve: Array<{ time: number; cumPnl: number }>;
+}
+
+/** One row of a grouped breakdown (by symbol, setup, tag, hold-time bucket, …). */
+export interface Breakdown {
+  key: string;
+  netPnl: number;
+  tradeCount: number;
+  winRate: number;
+  avgR: number | null;
+}
+
+export interface Stats {
+  byCurrency: CurrencyStats[];
+}

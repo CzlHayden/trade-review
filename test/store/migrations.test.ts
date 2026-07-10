@@ -64,3 +64,14 @@ test("v2 adds enrichment columns to trades", () => {
     expect(cols).toContain(c);
   }
 });
+
+test("v3 adds flags and config tables", () => {
+  const db = memDb();
+  runMigrations(db);
+  const names = db
+    .query("SELECT name FROM sqlite_master WHERE type='table'")
+    .all()
+    .map((r: any) => r.name);
+  expect(names).toContain("flags");
+  expect(names).toContain("config");
+});
