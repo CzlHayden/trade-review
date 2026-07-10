@@ -52,6 +52,21 @@ test("the queried market is only a last-resort fallback when the row carries no 
   expect(f.symbol).toBe("US.AAPL"); // no trdMarket/secMarket on the row → fall back to queried (2=US)
 });
 
+test("a nonzero-but-unmapped secMarket (FX=91) is UNKNOWN, never the queried market's currency", () => {
+  // Guards money-math: an FX row returned under an HK query must not be labeled HKD.
+  const f = mapFill({ trdSide: 1, fillID: 1, orderID: 1, code: "EURUSD", qty: 1, price: 1, createTimestamp: 1, secMarket: 91 }, "a", 1);
+  expect(f.currency).toBe("UNKNOWN"); // segmented safely, not HKD
+});
+
+test("ambiguous SH/SZ secMarket resolves to HKCC only when the query says so, else mainland CN", () => {
+  const hkcc = mapFill({ trdSide: 1, fillID: 1, orderID: 1, code: "600000", qty: 1, price: 1, createTimestamp: 1, secMarket: 31 }, "a", 4);
+  expect(hkcc.symbol).toBe("HK.600000"); // queried HKCC(4) disambiguates; currency CNH
+  expect(hkcc.currency).toBe("CNH");
+  const cn = mapFill({ trdSide: 1, fillID: 1, orderID: 1, code: "600000", qty: 1, price: 1, createTimestamp: 1, secMarket: 31 }, "a");
+  expect(cn.symbol).toBe("CN.600000"); // no query context → mainland CN default; currency CNH
+  expect(cn.currency).toBe("CNH");
+});
+
 test("mapFill maps a US buy fill (fee defaults to 0, currency from market, ms from timestamp)", () => {
   const f = mapFill(
     { trdSide: 1, fillID: 123, orderID: 456, code: "AAPL", qty: 100, price: 10.5, createTimestamp: 1_700_000_000, trdMarket: 2 },

@@ -117,16 +117,22 @@ const SEC_TO_TRD: Record<number, number> = {
   1: 1, 2: 2, 31: 3, 32: 3, 41: 6, 51: 15, 61: 8, 71: 111, 81: 112, 101: 7,
 };
 
-// A row's OWN market is authoritative. OpenD returns an account's fills/orders across market-header
+// A row's OWN trdMarket is authoritative. OpenD returns an account's fills/orders across market-header
 // queries WITHOUT filtering (verified live: querying trdMarket 1/2/15 all return the same US fills,
-// each carrying trdMarket=2), so the queried market is unreliable and only a last-resort fallback.
-// protobufjs surfaces omitted optional numerics as 0 (not undefined), so `||` correctly skips them.
-function marketOf(raw: any): number {
-  return raw.trdMarket || SEC_TO_TRD[raw.secMarket] || 0;
-}
-
+// each carrying trdMarket=2), so the queried market must NOT override a present trdMarket.
+// protobufjs surfaces omitted optional numerics as 0 (not undefined), so `raw.trdMarket` truthiness
+// correctly detects presence.
 function resolveMarket(raw: any, queriedMarket: number | undefined): number {
-  return marketOf(raw) || (queriedMarket && queriedMarket > 0 ? queriedMarket : 0);
+  if (raw.trdMarket) return raw.trdMarket; // authoritative — always present in real OpenD data
+  const sec = raw.secMarket;
+  // SH/SZ A-shares: secMarket 31/32 is ambiguous between mainland CN (3) and HKCC (4); the query
+  // context disambiguates when it's specifically HKCC, otherwise default to mainland CN.
+  if (sec === 31 || sec === 32) return queriedMarket === 4 ? 4 : 3;
+  // A mapped secMarket is the row's own market. A NONZERO-but-unmapped secMarket (e.g. FX=91 has no
+  // TrdMarket) becomes 0/UNKNOWN — segments safely rather than borrowing the query's wrong currency.
+  if (sec) return SEC_TO_TRD[sec] ?? 0;
+  // No market on the row at all → the queried market is the only signal left.
+  return queriedMarket && queriedMarket > 0 ? queriedMarket : 0;
 }
 
 /** OrderFillStatus: 0=OK, 1=Cancelled, 2=Changed. A cancelled fill never executed — exclude it
