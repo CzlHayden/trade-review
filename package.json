@@ -12,5 +12,8 @@
   },
   "peerDependencies": {
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "futu-api": "^10.8.6808"
   }
 }
