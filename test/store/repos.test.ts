@@ -25,6 +25,15 @@ test("upsertRawFills inserts and reads back, ordered by time", () => {
   expect(rows[1]!.price).toBe(10);
 });
 
+test("upsertRawFills round-trips every field (guards the snake_case mapping boundary)", () => {
+  const db = openTestDb();
+  const f = fill("BUY", 100, 10, {
+    id: "f1", orderId: "o9", fee: 1.25, currency: "HKD", account: "acc2", time: 4000, symbol: "0700",
+  });
+  upsertRawFills(db, [f]);
+  expect(allRawFills(db)).toEqual([f]);
+});
+
 test("upsertRawFills is idempotent — re-inserting the same id updates, never duplicates", () => {
   const db = openTestDb();
   upsertRawFills(db, [fill("BUY", 100, 10, { id: "f1" })]);
@@ -32,6 +41,16 @@ test("upsertRawFills is idempotent — re-inserting the same id updates, never d
   const rows = allRawFills(db);
   expect(rows).toHaveLength(1);
   expect(rows[0]!.price).toBe(12); // last write wins
+});
+
+test("upsertRawOrders round-trips every field", () => {
+  const db = openTestDb();
+  const o = order("SELL", "STOP_LIMIT", 100, {
+    id: "o1", price: 9.5, triggerPrice: 9, status: "SUBMITTED",
+    createTime: 1000, updateTime: 2000, account: "acc2", symbol: "0700",
+  });
+  upsertRawOrders(db, [o]);
+  expect(allRawOrders(db)).toEqual([o]);
 });
 
 test("upsertRawOrders round-trips nullable price/triggerPrice/updateTime", () => {
@@ -48,16 +67,33 @@ test("upsertRawOrders round-trips nullable price/triggerPrice/updateTime", () =>
   expect(rows[1]!.updateTime).toBe(2000);
 });
 
-test("insertPositionSnapshot keeps one row per (account,symbol,time); latestPositions returns newest per symbol", () => {
+test("insertPositionSnapshot round-trips every field", () => {
   const db = openTestDb();
-  insertPositionSnapshot(db, [rawPos(100, 10, { symbol: "AAPL", time: 1000 })]);
-  insertPositionSnapshot(db, [rawPos(150, 10.5, { symbol: "AAPL", time: 2000 })]); // newer snapshot
-  insertPositionSnapshot(db, [rawPos(-20, 300, { symbol: "TSLA", time: 1500 })]);
+  const p = rawPos(-20, 305.5, { symbol: "0700", currency: "HKD", account: "acc2", time: 7000 });
+  insertPositionSnapshot(db, [p]);
+  expect(latestPositions(db)).toEqual([p]);
+});
+
+test("latestPositions returns the latest snapshot batch per account", () => {
+  const db = openTestDb();
+  insertPositionSnapshot(db, [rawPos(100, 10, { symbol: "AAPL", time: 1000 })]); // sync 1
+  // sync 2 @2000: one coherent batch — same time — holds AAPL 150 + TSLA -20
+  insertPositionSnapshot(db, [
+    rawPos(150, 10.5, { symbol: "AAPL", time: 2000 }),
+    rawPos(-20, 300, { symbol: "TSLA", time: 2000 }),
+  ]);
   const latest = latestPositions(db);
   const aapl = latest.find((p) => p.symbol === "AAPL")!;
-  expect(aapl.qty).toBe(150); // the 2000 snapshot, not the 1000 one
+  expect(aapl.qty).toBe(150); // the 2000 batch, not the 1000 one
   expect(aapl.avgCost).toBe(10.5);
   expect(latest.find((p) => p.symbol === "TSLA")!.qty).toBe(-20);
+});
+
+test("latestPositions drops symbols absent from the latest batch (closed positions aren't phantom-held)", () => {
+  const db = openTestDb();
+  insertPositionSnapshot(db, [rawPos(100, 10, { symbol: "AAPL", time: 1000 })]); // sync 1: held AAPL
+  insertPositionSnapshot(db, [rawPos(50, 300, { symbol: "TSLA", time: 2000 })]); // sync 2: AAPL closed
+  expect(latestPositions(db).map((p) => p.symbol)).toEqual(["TSLA"]); // AAPL gone, not stale
 });
 
 test("insertPositionSnapshot re-inserting the same (account,symbol,time) replaces, not duplicates", () => {
@@ -92,13 +128,9 @@ test("replaceDerived writes trades, their fill links, and flags", () => {
   const flags: Flag[] = [{ ruleId: "cut_winner_early", severity: "warn", reason: "left money" }];
   replaceDerived(db, [t], new Map([[t.id, flags]]));
 
-  const got = allTrades(db);
-  expect(got).toHaveLength(1);
-  expect(got[0]!.id).toBe(t.id);
-  expect(got[0]!.coverageOk).toBe(true);
-  expect(got[0]!.effectiveStop).toBe(9);
-  expect(got[0]!.effectiveTp).toBeNull();
-  expect(got[0]!.fillIds.sort()).toEqual(["f1", "f2"]);
+  // Full-object equality guards every field across the `as any[]` read boundary. fillIds come
+  // back in insertion order (rowid), so no .sort() — a scrambled order would (correctly) fail here.
+  expect(allTrades(db)).toEqual([t]);
   expect(flagsForTrade(db, t.id)).toEqual(flags);
 });
 
@@ -113,6 +145,19 @@ test("replaceDerived fully replaces prior derived data (idempotent rebuild)", ()
   expect(allTrades(db).map((t) => t.id)).toEqual(["b"]);
   expect(flagsForTrade(db, "a")).toEqual([]); // old flags wiped
   expect(flagsForTrade(db, "b")).toEqual([]);
+});
+
+test("replaceDerived rolls back fully if the batch throws mid-transaction", () => {
+  const db = openTestDb();
+  const good = tradeFixture({ id: "a", fillIds: ["fa"] });
+  const flag = { ruleId: "oversized", severity: "warn" as const, reason: "big" };
+  replaceDerived(db, [good], new Map([["a", [flag]]]));
+  // A batch with a duplicate trade id violates the trades PK on the second insert, after the
+  // DELETEs have run — the whole transaction must roll back, leaving the prior data intact.
+  const dup = tradeFixture({ id: "dup", fillIds: ["fd"] });
+  expect(() => replaceDerived(db, [dup, dup], new Map())).toThrow();
+  expect(allTrades(db).map((t) => t.id)).toEqual(["a"]);
+  expect(flagsForTrade(db, "a")).toEqual([flag]);
 });
 
 test("replaceDerived round-trips an open trade with null exit/pnl/enrichment", () => {

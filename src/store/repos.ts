@@ -82,11 +82,13 @@ export function insertPositionSnapshot(db: Database, rows: RawPosition[]): void 
   })();
 }
 
-/** The most recent snapshot per (account, symbol). */
+/** The latest snapshot *batch* per account — the rows from that account's most recent sync.
+ * A snapshot contains only currently-held symbols, so taking the latest batch (not the latest
+ * time per symbol) correctly drops positions that were closed and thus absent from a later sync. */
 export function latestPositions(db: Database): RawPosition[] {
   const rows = db
     .query(`SELECT account, symbol, qty, avg_cost, currency, time FROM raw_positions p
-            WHERE time = (SELECT MAX(time) FROM raw_positions q WHERE q.account = p.account AND q.symbol = p.symbol)
+            WHERE time = (SELECT MAX(time) FROM raw_positions q WHERE q.account = p.account)
             ORDER BY account ASC, symbol ASC`)
     .all() as any[];
   return rows.map((r) => ({
@@ -138,7 +140,9 @@ export function replaceDerived(db: Database, trades: Trade[], flags: Map<string,
 
 export function allTrades(db: Database): Trade[] {
   const rows = db.query(`SELECT * FROM trades ORDER BY open_time ASC, id ASC`).all() as any[];
-  const links = db.query(`SELECT trade_id, fill_id FROM trade_fills`).all() as any[];
+  // ORDER BY rowid preserves insertion order, which is the builder's chronological fill order
+  // (replaceDerived inserts t.fillIds in order). Without it SQLite may return PK-index order.
+  const links = db.query(`SELECT trade_id, fill_id FROM trade_fills ORDER BY rowid ASC`).all() as any[];
   const byTrade = new Map<string, string[]>();
   for (const l of links) {
     let arr = byTrade.get(l.trade_id);
