@@ -113,6 +113,77 @@ test("runSync is incremental — second run pulls from the last cursor", async (
   expect(seen[1]).toBe(100_000); // second: last cursor
 });
 
+test("runSync skips simulate accounts (only trdEnv real is queried)", async () => {
+  const db = openTestDb();
+  const queried: string[] = [];
+  const client: FutuClient = {
+    getAccounts: async () => [
+      { id: "real", trdEnv: 1, markets: [2] },
+      { id: "sim", trdEnv: 0, markets: [2] },
+    ],
+    getHistoryFills: async (a) => {
+      queried.push(a.id);
+      return [];
+    },
+    getHistoryOrders: async () => [],
+    getPositions: async () => [],
+    close: () => {},
+  };
+  const res = await runSync({ db, client, candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 10_000 });
+  expect(res.accounts).toBe(1);
+  expect(queried).toEqual(["real"]); // sim account never queried
+});
+
+test("runSync skips unknown markets (e.g. futures=5)", async () => {
+  const db = openTestDb();
+  const markets: number[] = [];
+  const client = stubClient({
+    getAccounts: async () => [{ id: "acc1", trdEnv: 1, markets: [2, 5] }], // US + futures
+    getHistoryFills: async (_a, m) => {
+      markets.push(m);
+      return [];
+    },
+  });
+  await runSync({ db, client, candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 10_000 });
+  expect(markets).toEqual([2]); // futures (5) skipped
+});
+
+test("runSync pulls orders over the full window even on incremental fill syncs", async () => {
+  const db = openTestDb();
+  const orderBegins: number[] = [];
+  const client = stubClient({
+    getHistoryOrders: async (_a, _m, begin) => {
+      orderBegins.push(begin);
+      return [];
+    },
+  });
+  await runSync({ db, client, candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 100_000, historyDays: 1 });
+  await runSync({ db, client, candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 200_000, historyDays: 1 });
+  // Both runs pull orders from now - historyDays (mutable orders), NOT from the fills cursor.
+  expect(orderBegins[0]).toBe(100_000 - 86_400_000);
+  expect(orderBegins[1]).toBe(200_000 - 86_400_000);
+});
+
+test("runSync carries forward MAE/MFE when candles degrade (no silent regression)", async () => {
+  const db = openTestDb();
+  const fills = [
+    { id: "f1", orderId: "o1", symbol: "US.AAPL", side: "BUY" as const, qty: 100, price: 10, fee: 0, currency: "USD", time: 1000, account: "acc1" },
+    { id: "f2", orderId: "o2", symbol: "US.AAPL", side: "SELL" as const, qty: 100, price: 11, fee: 0, currency: "USD", time: 5000, account: "acc1" },
+  ];
+  const client = stubClient({ getHistoryFills: async () => fills });
+  const withCandles: CandleSource = {
+    getCandles: async () => [{ time: 1000, open: 10, high: 13, low: 8, close: 11, volume: 1 }],
+  };
+  await runSync({ db, client, candles: withCandles, config: DEFAULT_RULE_CONFIG, now: 10_000 });
+  expect(allTrades(db)[0]!.mae).toBe(2);
+
+  // Second sync during a Yahoo outage (getCandles → []): prior mae/mfe must survive, not go null.
+  await runSync({ db, client, candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 20_000 });
+  const t = allTrades(db)[0]!;
+  expect(t.mae).toBe(2);
+  expect(t.mfe).toBe(3);
+});
+
 test("runSync is idempotent — re-running the same data yields the same single trade", async () => {
   const db = openTestDb();
   const client = stubClient({

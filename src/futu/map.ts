@@ -25,8 +25,8 @@ const MARKET_NAME: Record<number, string> = {
   1: "HK", 2: "US", 3: "CN", 4: "HKCC", 6: "SG", 8: "AU", 15: "JP", 111: "MY", 112: "CA",
 };
 const MARKET_CURRENCY: Record<number, string> = {
-  1: "HKD", 2: "USD", 3: "CNH", 4: "HKD", 6: "SGD", 8: "AUD", 15: "JPY", 111: "MYR", 112: "CAD",
-};
+  1: "HKD", 2: "USD", 3: "CNH", 4: "CNH", 6: "SGD", 8: "AUD", 15: "JPY", 111: "MYR", 112: "CAD",
+}; // HKCC (4) = China-Connect A-shares, settle in CNH (not HKD)
 const ENUM_CURRENCY: Record<number, string> = {
   1: "HKD", 2: "USD", 3: "CNH", 4: "JPY", 5: "SGD", 6: "AUD", 7: "CAD", 8: "MYR",
 };
@@ -39,6 +39,11 @@ export function futuSymbol(code: string, market: number): string {
 /** Unique market key used for the sync_state cursor (e.g. 2 → "US", 4 → "HKCC"). */
 export function marketName(market: number): string {
   return MARKET_NAME[market] ?? `MKT_${market}`;
+}
+
+/** Whether we recognize this TrdMarket. Sync skips unknown ones (e.g. futures=5, funds=113). */
+export function knownMarket(market: number): boolean {
+  return market in MARKET_NAME;
 }
 
 export function currencyForMarket(market: number): string {
@@ -54,7 +59,10 @@ export function currencyForEnum(cur: number | undefined): string {
 /** FUTU numeric `*Timestamp` fields are unix SECONDS. Prefer them; fall back to the string form. */
 export function toMs(timestamp: number | undefined, timeStr: string | undefined): number {
   if (typeof timestamp === "number" && timestamp > 0) return Math.round(timestamp * 1000);
-  if (timeStr) return Date.parse(timeStr.replace(" ", "T"));
+  if (timeStr) {
+    const ms = Date.parse(timeStr.replace(" ", "T")); // NOTE: parsed as machine-local (tz skew if the
+    return Number.isNaN(ms) ? 0 : ms; //                 machine tz ≠ market tz); numeric path is the norm.
+  }
   return 0;
 }
 
@@ -129,9 +137,11 @@ export function mapFill(raw: any, account: string): RawFill {
 export function mapOrder(raw: any, account: string): RawOrder {
   const market = marketOf(raw);
   const type = orderTypeFrom(raw.orderType);
-  const triggerPrice = STOP_TYPES.has(type) ? (raw.auxPrice ?? null) : null;
+  // `> 0` (not `??`): protobufjs decodes an omitted auxPrice/price as 0. A trigger/limit is never 0,
+  // and a triggerPrice of 0 would read as a live "stop @ 0" → absurd risk and poisoned flags.
+  const triggerPrice = STOP_TYPES.has(type) && raw.auxPrice > 0 ? raw.auxPrice : null;
   // Stop-market and market orders have no resting limit price; stop-limit keeps `price`.
-  const price = type === "MARKET" || type === "STOP" ? null : (raw.price ?? null);
+  const price = type === "MARKET" || type === "STOP" ? null : raw.price > 0 ? raw.price : null;
   return {
     id: String(raw.orderID),
     symbol: futuSymbol(raw.code, market),

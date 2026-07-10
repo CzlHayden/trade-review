@@ -64,6 +64,20 @@ test("mapOrder maps a stop order: trigger from auxPrice, type STOP, dead status 
   expect(o.symbol).toBe("US.AAPL");
 });
 
+test("mapOrder: a trailing stop with omitted auxPrice (decodes as 0) yields triggerPrice null, not 0", () => {
+  // protobufjs surfaces the omitted auxPrice as 0; a live "stop @ 0" would poison risk/flags.
+  const o = mapOrder(
+    { trdSide: 2, orderType: 14, orderStatus: 5, orderID: 7, code: "AAPL", qty: 100, price: 0, auxPrice: 0, trailValue: 5, createTimestamp: 1, trdMarket: 2 },
+    "a",
+  );
+  expect(o.type).toBe("TRAILING_STOP");
+  expect(o.triggerPrice).toBeNull();
+});
+
+test("currencyForMarket maps HKCC (China-Connect) to CNH, not HKD", () => {
+  expect(currencyForMarket(4)).toBe("CNH");
+});
+
 test("mapOrder maps a plain limit: type LIMIT, price kept, trigger null", () => {
   const o = mapOrder(
     { trdSide: 1, orderType: 1, orderStatus: 11, orderID: 1, code: "00700", qty: 10, price: 350, createTimestamp: 1, trdMarket: 1 },

@@ -6,10 +6,11 @@ import { inferStops } from "../core/stop-inference";
 import { computeRisk } from "../core/risk";
 import { computeExcursion } from "../core/mae-mfe";
 import { evaluate } from "../core/rule-engine";
-import { marketName } from "../futu/map";
+import { knownMarket, marketName, TRD_ENV_REAL } from "../futu/map";
 import {
   allRawFills,
   allRawOrders,
+  allTrades,
   insertPositionSnapshot,
   replaceDerived,
   upsertRawFills,
@@ -64,23 +65,31 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
   const { db, client, candles, config, now } = deps;
   const historyDays = deps.historyDays ?? 90;
 
-  const accounts = await client.getAccounts();
+  // FUTU returns real AND simulate accounts; only real ones have queryable history and belong in
+  // the review DB. Sync only recognized markets (skip futures/funds/unknown).
+  const accounts = (await client.getAccounts()).filter((a) => a.trdEnv === TRD_ENV_REAL);
   let fillCount = 0;
   let orderCount = 0;
 
   for (const acc of accounts) {
     const snapshot: RawPosition[] = [];
     for (const market of acc.markets) {
+      if (!knownMarket(market)) continue;
       const mkt = marketName(market);
       const state = getSyncState(db, acc.id, mkt);
-      const beginMs = state?.lastSyncedTime ?? now - historyDays * DAY_MS;
+      const fullWindowBegin = now - historyDays * DAY_MS;
+      const beginMs = state?.lastSyncedTime ?? fullWindowBegin;
       const endMs = now;
 
       const fills = await client.getHistoryFills(acc, market, beginMs, endMs);
       if (fills.length) upsertRawFills(db, fills);
       fillCount += fills.length;
 
-      const orders = await client.getHistoryOrders(acc, market, beginMs, endMs);
+      // Orders MUTATE after creation (a trailed/cancelled stop changes status + auxPrice), and FUTU
+      // filters history orders by CREATE time — so an incremental window would never refetch a moved
+      // stop. Always pull the full window for orders (volume is low). Bound: orders older than
+      // historyDays whose stop moved recently still won't refresh — acceptable for v1 swing horizons.
+      const orders = await client.getHistoryOrders(acc, market, fullWindowBegin, endMs);
       if (orders.length) upsertRawOrders(db, orders);
       orderCount += orders.length;
 
@@ -99,8 +108,17 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
   }
 
   // ---- rebuild derived from the full raw set ----
+  // Prior derived trades, keyed by id — used to carry forward MAE/MFE if candles degrade this run,
+  // so a transient Yahoo outage can't overwrite previously-correct excursions (and the flags that
+  // depend on them) with nulls. Trade ids are deterministic, so an unchanged trade keeps its key.
+  const prior = new Map(allTrades(db).map((t) => [t.id, t] as const));
+
   const allFills = allRawFills(db);
   const allOrders = allRawOrders(db);
+  // v1 LIMITATION — no seeds: a position opened BEFORE the sync window that is sold inside it has
+  // no opening BUY in our data, so trade-builder reads the lone SELL as a phantom SHORT open with
+  // coverageOk:true (wrong direction/PnL, and rules run on it). Correct fix = pre-existing-position
+  // seeding (buildTrades already accepts seeds + marks coverageOk:false). Tracked as a follow-up.
   const built = buildTrades(allFills).sort(
     (a, b) => a.openTime - b.openTime || a.id.localeCompare(b.id),
   );
@@ -117,7 +135,12 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
     const from = t.openTime - PAD_MS;
     const to = (t.closeTime ?? now) + PAD_MS;
     const bars = await candles.getCandles(t.symbol, from, to, resMs);
-    const { mae, mfe } = computeExcursion(t, bars, resMs);
+    const excursion = computeExcursion(t, bars, resMs);
+    // Degrade safely: if candles are unavailable this run, keep any excursion computed on a prior
+    // sync rather than nulling it (which would silently drop mae/mfe-dependent flags).
+    const priorT = prior.get(t.id);
+    const mae = excursion.mae ?? priorT?.mae ?? null;
+    const mfe = excursion.mfe ?? priorT?.mfe ?? null;
 
     const enriched: Trade = {
       ...t,

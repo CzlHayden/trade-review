@@ -395,4 +395,18 @@ test("runSync is incremental — second run pulls from the last cursor", async (
 - Candle failure degrades gracefully (`[]`), never breaks sync.
 - **Manual:** one live smoke run against OpenD confirms real data flows end-to-end (may be deferred to the user if OpenD isn't up during execution).
 
+## Review-driven changes (Codex + Fable)
+
+Landed during review, beyond the task steps above:
+- **Real accounts + known markets only:** `runSync` filters `trdEnv === TRD_ENV_REAL` (FUTU returns sim accounts too, whose history endpoints reject → would abort the sync) and skips unrecognized markets (futures/funds). *(Fable #1)*
+- **Unique sync cursor keys:** `marketName` has its own map so HK(1)/HKCC(4) don't collide on the `sync_state` key. *(Codex P1)*
+- **protobufjs zero-defaults:** omitted optional numerics decode as `0`, not `undefined`. `marketOf`/`||` fallbacks for market+cost, and `auxPrice > 0 ? … : null` / `price > 0 ? … : null` so a trailing stop with an omitted trigger isn't read as a live "stop @ 0". *(Codex P2, Fable #2)*
+- **Orders pulled over the full window:** orders mutate after creation and FUTU filters history orders by create time, so an incremental window would never refetch a moved stop. Fills stay incremental; orders always pull `historyDays`. *(Fable #3)*
+- **MAE/MFE carry-forward:** a candle-source outage returns `[]`; rather than overwrite prior excursions (and their flags) with null, sync carries forward the previous trade's mae/mfe. *(Fable #4)*
+- **Dotted tickers + HKCC currency:** `yahooSymbol` splits on the first dot and maps `US.BRK.B → BRK-B`; HKCC settles in CNH. *(Codex P2, Fable minor)*
+
+**Known limitation (tracked as a follow-up task):** `runSync` passes no seed positions to `buildTrades`, so a position opened before the sync window and sold inside it becomes a phantom SHORT with `coverageOk:true`. The correct fix (pre-existing-position seeding / coverage detection) is its own unit of work. *(Fable #5)*
+
+Not caching candles yet (spec §8 `candles_cache`) — every sync re-fetches; acceptable at v1 trade volumes, and the carry-forward above removes the data-loss risk. A cache is a natural follow-up.
+
 **Next (Plan 6 — API + web):** a Bun HTTP server over the store/analytics + a React/Vite SPA (Lightweight Charts) — dashboard, trades, detail, open positions, weekly journal.
