@@ -299,5 +299,6 @@ Analogy: the binary is the *program*, the DB is the *save file*; updating the pr
 3. **Intraday candle depth** — free sources cap intraday history (~60 days of 1-min); acceptable for v1?
 4. **Localhost port + browser-open behavior** across macOS/Windows.
 5. **Config-file location/format** for rule thresholds (since there's no settings UI in v1).
-6. **Release repo** — confirm public repo (simple free self-update) vs. private (needs embedded token).
+
+**Resolved:** Release repo = **public** (zero token setup, free self-update; only code is public, never data).
 ```
