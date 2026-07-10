@@ -56,13 +56,9 @@ export async function connectFutu(opts: ConnectOpts = {}): Promise<FutuClient> {
     ws.onlogin = (ok: boolean, msg: unknown) =>
       done(() => (ok ? resolve() : reject(new Error(`OpenD login failed: ${JSON.stringify(msg)}`))));
     ws.start(host, port, false, key); // (ip, port, ssl=false, plaintext key)
-    // Best-effort fast-fail on an abnormal socket error/close before login (down / wrong port).
-    // These are the user-hook seams on the base socket (base.js forwards to them); safe to set and
-    // guarded by `settled` so they never fire after a successful login.
-    if (ws.websock) {
-      ws.websock.onerror = () => done(() => reject(new Error(`OpenD socket error (ws://${host}:${port})`)));
-      ws.websock.onclose = () => done(() => reject(new Error(`OpenD socket closed before login (ws://${host}:${port})`)));
-    }
+    // NOTE: we do NOT hook ws.websock.onerror/onclose to fast-fail. futu-api emits transient
+    // socket error/close events during its normal connect+handshake dance, so rejecting on them
+    // aborts even successful logins. The timeout above is the safe mechanism for a down OpenD.
   });
 
   // Preserve the raw SDK account object (its accID is a uint64 we must echo back verbatim rather
