@@ -121,12 +121,11 @@ export const DEFAULT_RULE_CONFIG: RuleConfig = {
   enabled: {},
 };
 
-/** Everything a rule may need beyond the trade itself. */
+/** Everything a rule may need beyond the trade itself. `recentClosedTrades` are PRIOR closed
+ * trades in the same account (excluding this one) — used for recent-average risk and revenge timing. */
 export interface RuleContext {
   fills: RawFill[]; // the fills composing THIS trade
-  candles: Candle[]; // candles overlapping the trade window
-  resolution: number; // candle bar duration (ms)
-  recentClosedTrades: Trade[]; // prior closed trades in the same account (for averages + timing)
+  recentClosedTrades: Trade[];
 }
 
 /** Per-currency aggregate stats (P&L is never summed across currencies). */
@@ -144,8 +143,9 @@ export interface CurrencyStats {
   equityCurve: Array<{ time: number; cumPnl: number }>;
 }
 
-/** One row of a grouped breakdown (by symbol, setup, tag, hold-time bucket, …). */
+/** One row of a grouped breakdown (by symbol, setup, tag, hold-time bucket, …), per currency. */
 export interface Breakdown {
+  currency: string;
   key: string;
   netPnl: number;
   tradeCount: number;

@@ -7,8 +7,6 @@ import { DEFAULT_RULE_CONFIG, type RuleContext, type Trade } from "../../src/dom
 function ctx(over: Partial<RuleContext> = {}): RuleContext {
   return {
     fills: over.fills ?? [],
-    candles: over.candles ?? [],
-    resolution: over.resolution ?? 60_000,
     recentClosedTrades: over.recentClosedTrades ?? [],
   };
 }
@@ -76,16 +74,23 @@ test("round_tripped_gain: peak >= 1R then closed red", () => {
 });
 
 test("overtrading_revenge: opened soon after a losing exit", () => {
-  const loser = { ...base(), realizedPnl: -50, closeTime: 1_000_000 };
-  const trade = { ...base(), openTime: 1_000_000 + 5 * 60_000 }; // 5 min later
+  const loser = { ...base(), id: "prior", realizedPnl: -50, closeTime: 1_000_000 };
+  const trade = { ...base(), id: "current", openTime: 1_000_000 + 5 * 60_000 }; // 5 min later
   const flags = evaluate(trade, ctx({ recentClosedTrades: [loser] }), DEFAULT_RULE_CONFIG);
   expect(ids(flags)).toContain("overtrading_revenge");
 });
 
 test("overtrading_revenge: after a WINNER does not fire", () => {
-  const winner = { ...base(), realizedPnl: 50, closeTime: 1_000_000 };
-  const trade = { ...base(), openTime: 1_000_000 + 5 * 60_000 };
+  const winner = { ...base(), id: "prior", realizedPnl: 50, closeTime: 1_000_000 };
+  const trade = { ...base(), id: "current", openTime: 1_000_000 + 5 * 60_000 };
   const flags = evaluate(trade, ctx({ recentClosedTrades: [winner] }), DEFAULT_RULE_CONFIG);
+  expect(ids(flags)).not.toContain("overtrading_revenge");
+});
+
+test("overtrading_revenge: a trade does not flag itself", () => {
+  // Same id in recentClosedTrades must be ignored (the self-exclusion guard).
+  const trade = { ...base(), id: "same", realizedPnl: -50, closeTime: 1_000_000, openTime: 1_000_000 };
+  const flags = evaluate(trade, ctx({ recentClosedTrades: [{ ...trade }] }), DEFAULT_RULE_CONFIG);
   expect(ids(flags)).not.toContain("overtrading_revenge");
 });
 
@@ -93,6 +98,35 @@ test("a disabled rule never fires", () => {
   const trade = { ...base(), realizedPnl: 50, rMultiple: 0.4 };
   const cfg = { ...DEFAULT_RULE_CONFIG, enabled: { cut_winner_early: false } };
   expect(ids(evaluate(trade, ctx(), cfg))).not.toContain("cut_winner_early");
+});
+
+test("no rules fire on a coverage-incomplete (seeded) trade", () => {
+  const trade = { ...base(), coverageOk: false, realizedPnl: 50, rMultiple: 0.4 };
+  expect(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG)).toEqual([]);
+});
+
+test("oversized ignores recent trades in a different currency", () => {
+  const hkd = [
+    { ...base(), id: "h1", currency: "HKD", risk: 8000 },
+    { ...base(), id: "h2", currency: "HKD", risk: 8000 },
+  ];
+  const trade = { ...base(), currency: "USD", risk: 1500 };
+  // No USD history → oversized can't fire (avg is null); HKD sizes must not suppress or trigger it.
+  expect(
+    ids(evaluate(trade, ctx({ recentClosedTrades: hkd }), DEFAULT_RULE_CONFIG)),
+  ).not.toContain("oversized");
+});
+
+test("added_to_loser tracks cost basis correctly after a partial reduce", () => {
+  const fills = [
+    fill("BUY", 100, 10, { time: 1000 }),
+    fill("SELL", 50, 12, { time: 2000 }), // reduce — avg cost stays 10, not 10.33
+    fill("BUY", 50, 11, { time: 3000 }), // re-add at 11 → avg becomes 10.5, not a loser add
+    fill("BUY", 50, 10.4, { time: 4000 }), // 10.4 < 10.5 → added to loser (missed if basis is stale)
+    fill("SELL", 150, 10.5, { time: 5000 }),
+  ];
+  const trade = buildTrades(fills)[0]!;
+  expect(ids(evaluate(trade, ctx({ fills }), DEFAULT_RULE_CONFIG))).toContain("added_to_loser");
 });
 
 // A closed LONG trade with no enrichment set; individual tests override fields.

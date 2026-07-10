@@ -27,19 +27,33 @@ function addedToLoser(trade: Trade, fills: RawFill[]): boolean {
       costVal += f.qty * f.price;
       qty += signed;
     } else {
-      qty += signed; // reducing — leave cost basis as-is for this simple check
+      // reducing — remove shares at the running average cost (avg is unchanged),
+      // so a later re-add is compared against the correct basis.
+      if (costQty > EPS) {
+        const avg = costVal / costQty;
+        costQty -= f.qty;
+        costVal -= avg * f.qty;
+      }
+      qty += signed;
     }
   }
   return false;
 }
 
-function avgRecentRisk(recent: Trade[]): number | null {
-  const risks = recent.filter((t) => t.risk !== null).map((t) => t.risk as number);
+/** Average risk of recent closed trades IN THE SAME CURRENCY (never mix HKD and USD sizes). */
+function avgRecentRisk(recent: Trade[], currency: string): number | null {
+  const risks = recent
+    .filter((t) => t.currency === currency && t.risk !== null)
+    .map((t) => t.risk as number);
   if (risks.length === 0) return null;
   return risks.reduce((a, b) => a + b, 0) / risks.length;
 }
 
 export function evaluate(trade: Trade, ctx: RuleContext, config: RuleConfig): Flag[] {
+  // Seeded trades have incomplete fill history; their enrichment is approximate, so — like
+  // analytics — we don't run rules on them (avoids false flags on partial data).
+  if (!trade.coverageOk) return [];
+
   const flags: Flag[] = [];
   const add = (ruleId: string, severity: "info" | "warn", reason: string) => {
     if (on(config, ruleId)) flags.push({ ruleId, severity, reason });
@@ -78,7 +92,7 @@ export function evaluate(trade: Trade, ctx: RuleContext, config: RuleConfig): Fl
 
   // oversized
   if (on(config, "oversized") && trade.risk !== null) {
-    const avg = avgRecentRisk(ctx.recentClosedTrades);
+    const avg = avgRecentRisk(ctx.recentClosedTrades, trade.currency);
     if (avg !== null && avg > EPS && trade.risk > config.oversizedMult * avg) {
       add(
         "oversized",
@@ -107,6 +121,7 @@ export function evaluate(trade: Trade, ctx: RuleContext, config: RuleConfig): Fl
     const windowMs = config.revengeMinutes * 60_000;
     const revenge = ctx.recentClosedTrades.some(
       (p) =>
+        p.id !== trade.id && // never let a trade flag itself
         p.realizedPnl !== null &&
         p.realizedPnl < 0 &&
         p.closeTime !== null &&

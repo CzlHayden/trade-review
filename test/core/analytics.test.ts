@@ -112,8 +112,22 @@ test("breakdown groups by a key function and skips null keys", () => {
     (t) => (t.symbol === "SKIP" ? null : t.symbol),
   );
   const aapl = rows.find((r) => r.key === "AAPL")!;
+  expect(aapl.currency).toBe("USD");
   expect(aapl.netPnl).toBe(80);
   expect(aapl.tradeCount).toBe(2);
   expect(aapl.winRate).toBe(0.5);
   expect(rows.find((r) => r.key === "SKIP")).toBeUndefined();
+});
+
+test("breakdown keeps currencies separate under the same key", () => {
+  const rows = breakdown(
+    [
+      tr({ symbol: "X", currency: "USD", realizedPnl: 100 }),
+      tr({ symbol: "X", currency: "HKD", realizedPnl: 500 }),
+    ],
+    (t) => t.symbol,
+  );
+  expect(rows).toHaveLength(2);
+  expect(rows.find((r) => r.currency === "USD" && r.key === "X")!.netPnl).toBe(100);
+  expect(rows.find((r) => r.currency === "HKD" && r.key === "X")!.netPnl).toBe(500);
 });
