@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { CandleSource, FutuClient } from "../domain/ports";
-import type { Flag, RawPosition, RuleConfig, Trade } from "../domain/types";
+import type { Candle, Flag, RawFill, RawPosition, RuleConfig, SeedPosition, Trade } from "../domain/types";
 import { buildTrades } from "../core/trade-builder";
 import { inferStops } from "../core/stop-inference";
 import { computeRisk } from "../core/risk";
@@ -12,6 +12,7 @@ import {
   allRawOrders,
   allTrades,
   insertPositionSnapshot,
+  positionsAt,
   replaceDerived,
   upsertRawFills,
   upsertRawOrders,
@@ -42,6 +43,52 @@ export interface SyncResult {
 function resolutionMs(t: Trade): number {
   const intraday = t.holdSeconds !== null && t.holdSeconds < 2 * (DAY_MS / 1000);
   return intraday ? 3_600_000 : DAY_MS;
+}
+
+const POS_EPS = 1e-9;
+
+/**
+ * Reconstruct the position that existed BEFORE our data window, per (account, symbol), so trades
+ * touching pre-window shares are built as coverage-incomplete instead of phantom opposite-direction
+ * trades (which would corrupt realized P&L — the non-negotiable money-math invariant).
+ *
+ * Identity: `startPos = currentSnapshotQty − Σ(all stored fills)`. If the fills fully explain the
+ * current holding, startPos ≈ 0 and no seed is needed. A non-zero startPos means the holding predates
+ * coverage; seed it (buildTrades marks seeded trades coverageOk:false → excluded from stats). avgCost
+ * is best-effort (the snapshot's, or 0 when the lot was closed in-window) — it only affects the
+ * excluded coverage-incomplete trade, never a stats-eligible one.
+ */
+export function deriveSeeds(fills: RawFill[], snapshots: RawPosition[], fallbackTime: number): SeedPosition[] {
+  const net = new Map<string, number>();
+  const currency = new Map<string, string>();
+  const firstTime = new Map<string, number>();
+  for (const f of fills) {
+    const k = `${f.account}|${f.symbol}`;
+    net.set(k, (net.get(k) ?? 0) + (f.side === "BUY" ? f.qty : -f.qty));
+    if (!currency.has(k)) currency.set(k, f.currency);
+    firstTime.set(k, Math.min(firstTime.get(k) ?? Number.POSITIVE_INFINITY, f.time));
+  }
+  const snap = new Map<string, RawPosition>();
+  for (const s of snapshots) snap.set(`${s.account}|${s.symbol}`, s);
+
+  const seeds: SeedPosition[] = [];
+  for (const k of new Set([...net.keys(), ...snap.keys()])) {
+    const idx = k.indexOf("|");
+    const account = k.slice(0, idx);
+    const symbol = k.slice(idx + 1);
+    const s = snap.get(k);
+    const startPos = (s?.qty ?? 0) - (net.get(k) ?? 0);
+    if (Math.abs(startPos) < POS_EPS) continue; // fills fully explain the current holding
+    seeds.push({
+      account,
+      symbol,
+      qty: startPos,
+      avgCost: s?.avgCost ?? 0,
+      currency: s?.currency ?? currency.get(k) ?? "UNKNOWN",
+      time: Number.isFinite(firstTime.get(k)) ? firstTime.get(k)! : fallbackTime,
+    });
+  }
+  return seeds;
 }
 
 /** Prior closed, coverage-ok trades in the same account that closed no later than this one opened. */
@@ -115,11 +162,11 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
 
   const allFills = allRawFills(db);
   const allOrders = allRawOrders(db);
-  // v1 LIMITATION — no seeds: a position opened BEFORE the sync window that is sold inside it has
-  // no opening BUY in our data, so trade-builder reads the lone SELL as a phantom SHORT open with
-  // coverageOk:true (wrong direction/PnL, and rules run on it). Correct fix = pre-existing-position
-  // seeding (buildTrades already accepts seeds + marks coverageOk:false). Tracked as a follow-up.
-  const built = buildTrades(allFills).sort(
+  // Seed positions that predate our data window (reconciled against the current snapshot) so a
+  // holding opened before coverage and sold inside it is built as coverage-incomplete rather than a
+  // phantom opposite-direction trade with wrong P&L. See deriveSeeds.
+  const seeds = deriveSeeds(allFills, positionsAt(db, now), now);
+  const built = buildTrades(allFills, seeds).sort(
     (a, b) => a.openTime - b.openTime || a.id.localeCompare(b.id),
   );
 
@@ -134,7 +181,12 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
     const resMs = resolutionMs(t);
     const from = t.openTime - PAD_MS;
     const to = (t.closeTime ?? now) + PAD_MS;
-    const bars = await candles.getCandles(t.symbol, from, to, resMs);
+    let bars: Candle[] = [];
+    try {
+      bars = await candles.getCandles(t.symbol, from, to, resMs);
+    } catch {
+      bars = []; // a candle-source rejection must not abort the whole sync (contract: degrade to no MAE/MFE)
+    }
     const excursion = computeExcursion(t, bars, resMs);
     // Degrade safely: if candles are unavailable this run, keep any excursion computed on a prior
     // sync rather than nulling it (which would silently drop mae/mfe-dependent flags). But ONLY when

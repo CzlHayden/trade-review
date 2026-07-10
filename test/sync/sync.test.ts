@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test";
 import { openTestDb } from "../helpers";
-import { runSync } from "../../src/sync/sync";
+import { runSync, deriveSeeds } from "../../src/sync/sync";
+import type { RawFill, RawPosition } from "../../src/domain/types";
 import { DEFAULT_RULE_CONFIG, type Candle } from "../../src/domain/types";
 import type { Account, CandleSource, FutuClient } from "../../src/domain/ports";
 import { allTrades, flagsForTrade, positionsAt } from "../../src/store/repos";
@@ -191,16 +192,96 @@ test("runSync does NOT carry forward MAE/MFE when the trade shape changed (open 
   const withCandles: CandleSource = {
     getCandles: async () => [{ time: 1000, open: 10, high: 13, low: 8, close: 11, volume: 1 }],
   };
-  // sync 1: only the opening BUY → trade is OPEN; candles present → mae computed on the open window.
-  await runSync({ db, client: stubClient({ getHistoryFills: async () => [buy] }), candles: withCandles, config: DEFAULT_RULE_CONFIG, now: 10_000 });
+  const held: RawPosition[] = [
+    { account: "acc1", symbol: "US.AAPL", qty: 100, avgCost: 10, currency: "USD", time: 0 },
+  ];
+  // sync 1: opening BUY, still holding (snapshot reflects the 100 long → no seed) → trade OPEN;
+  // candles present → mae computed on the open window.
+  await runSync({
+    db,
+    client: stubClient({ getHistoryFills: async () => [buy], getPositions: async () => held }),
+    candles: withCandles,
+    config: DEFAULT_RULE_CONFIG,
+    now: 10_000,
+  });
   expect(allTrades(db)[0]!.status).toBe("open");
-  // sync 2: the exit arrives (same trade id, new shape) during a candle outage → must NOT reuse the
-  // open-window excursion; leave null until candles are available for the closed window.
-  await runSync({ db, client: stubClient({ getHistoryFills: async () => [buy, sell] }), candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 20_000 });
+  // sync 2: the exit arrives (same trade id, new shape), account now flat, during a candle outage →
+  // must NOT reuse the open-window excursion; leave null until candles cover the closed window.
+  await runSync({
+    db,
+    client: stubClient({ getHistoryFills: async () => [buy, sell], getPositions: async () => [] }),
+    candles: noCandles,
+    config: DEFAULT_RULE_CONFIG,
+    now: 20_000,
+  });
   const t = allTrades(db)[0]!;
   expect(t.status).toBe("closed");
   expect(t.mae).toBeNull();
   expect(t.mfe).toBeNull();
+});
+
+function rawFill(side: "BUY" | "SELL", qty: number, over: Partial<RawFill> = {}): RawFill {
+  return {
+    id: over.id ?? "f", orderId: over.orderId ?? "o", symbol: over.symbol ?? "US.AAPL", side, qty,
+    price: over.price ?? 10, fee: 0, currency: over.currency ?? "USD", time: over.time ?? 1000,
+    account: over.account ?? "acc1",
+  };
+}
+function pos(qty: number, over: Partial<RawPosition> = {}): RawPosition {
+  return {
+    account: over.account ?? "acc1", symbol: over.symbol ?? "US.AAPL", qty,
+    avgCost: over.avgCost ?? 10, currency: over.currency ?? "USD", time: over.time ?? 5000,
+  };
+}
+
+test("deriveSeeds: no seed when in-window fills fully explain the current snapshot", () => {
+  const fills = [rawFill("BUY", 100, { id: "f1" })];
+  expect(deriveSeeds(fills, [pos(100)], 0)).toEqual([]); // 100 held, 100 bought → startPos 0
+});
+
+test("deriveSeeds: seeds the pre-window remainder (snapshot − net fills)", () => {
+  const fills = [rawFill("SELL", 40, { id: "f1", time: 2000 })]; // net -40
+  const seeds = deriveSeeds(fills, [pos(60)], 0); // still hold 60 → startPos 60 - (-40) = 100
+  expect(seeds).toEqual([{ account: "acc1", symbol: "US.AAPL", qty: 100, avgCost: 10, currency: "USD", time: 2000 }]);
+});
+
+test("deriveSeeds: a pre-window long fully sold in-window (flat snapshot) still seeds a long", () => {
+  const fills = [rawFill("SELL", 100, { id: "f1" })]; // net -100
+  const seeds = deriveSeeds(fills, [], 0); // flat now → startPos 0 - (-100) = 100
+  expect(seeds[0]!.qty).toBe(100); // long, not a phantom short
+  expect(seeds[0]!.avgCost).toBe(0); // no snapshot row → best-effort 0 (trade is coverageOk:false)
+});
+
+test("runSync seeds a pre-existing holding so a sold pre-window position isn't a phantom SHORT", async () => {
+  const db = openTestDb();
+  const client = stubClient({
+    // Only a SELL in-window (the opening BUY predates coverage); account is flat afterward.
+    getHistoryFills: async () => [
+      { id: "f1", orderId: "o1", symbol: "US.AAPL", side: "SELL", qty: 100, price: 12, fee: 0, currency: "USD", time: 2000, account: "acc1" },
+    ],
+  });
+  await runSync({ db, client, candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 10_000 });
+  const t = allTrades(db)[0]!;
+  expect(t.direction).toBe("LONG"); // seeded long that was sold — NOT a phantom short
+  expect(t.coverageOk).toBe(false); // coverage-incomplete → excluded from P&L/stats
+});
+
+test("runSync survives a candle-source rejection (degrades to no MAE/MFE, doesn't abort)", async () => {
+  const db = openTestDb();
+  const client = stubClient({
+    getHistoryFills: async () => [
+      { id: "f1", orderId: "o1", symbol: "US.AAPL", side: "BUY", qty: 100, price: 10, fee: 0, currency: "USD", time: 1000, account: "acc1" },
+      { id: "f2", orderId: "o2", symbol: "US.AAPL", side: "SELL", qty: 100, price: 12, fee: 0, currency: "USD", time: 2000, account: "acc1" },
+    ],
+  });
+  const throwingCandles: CandleSource = {
+    getCandles: async () => {
+      throw new Error("provider down");
+    },
+  };
+  const res = await runSync({ db, client, candles: throwingCandles, config: DEFAULT_RULE_CONFIG, now: 10_000 });
+  expect(res.trades).toBe(1);
+  expect(allTrades(db)[0]!.mae).toBeNull();
 });
 
 test("runSync is idempotent — re-running the same data yields the same single trade", async () => {
