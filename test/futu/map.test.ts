@@ -34,11 +34,37 @@ test("mappers treat SDK default-zero market/cost as absent (protobufjs quirk)", 
   expect(p.avgCost).toBe(7);
 });
 
-test("an explicit queried market overrides the row's own market fields (avoids secMarket ambiguity)", () => {
-  // Row carries a TrdSecMarket value (AU=61) that isn't a TrdMarket; the queried market (8=AU) wins.
-  const f = mapFill({ trdSide: 1, fillID: 1, orderID: 1, code: "BHP", qty: 1, price: 1, createTimestamp: 1, secMarket: 61 }, "a", 8);
-  expect(f.symbol).toBe("AU.BHP");
-  expect(f.currency).toBe("AUD");
+test("the fill's OWN market wins over the queried market (OpenD returns cross-market fills)", () => {
+  // A US fill (trdMarket=2) returned under a JP (15) market query must stay US/USD, not JP/JPY.
+  const f = mapFill({ trdSide: 1, fillID: 1, orderID: 1, code: "CRWD", qty: 1, price: 1, createTimestamp: 1, trdMarket: 2, secMarket: 2 }, "a", 15);
+  expect(f.symbol).toBe("US.CRWD");
+  expect(f.currency).toBe("USD");
+});
+
+test("secMarket is translated to its TrdMarket when trdMarket is absent (SG=41 → market 6)", () => {
+  const f = mapFill({ trdSide: 1, fillID: 1, orderID: 1, code: "D05", qty: 1, price: 1, createTimestamp: 1, secMarket: 41 }, "a");
+  expect(f.symbol).toBe("SG.D05");
+  expect(f.currency).toBe("SGD");
+});
+
+test("the queried market is only a last-resort fallback when the row carries no market", () => {
+  const f = mapFill({ trdSide: 1, fillID: 1, orderID: 1, code: "AAPL", qty: 1, price: 1, createTimestamp: 1 }, "a", 2);
+  expect(f.symbol).toBe("US.AAPL"); // no trdMarket/secMarket on the row → fall back to queried (2=US)
+});
+
+test("a nonzero-but-unmapped secMarket (FX=91) is UNKNOWN, never the queried market's currency", () => {
+  // Guards money-math: an FX row returned under an HK query must not be labeled HKD.
+  const f = mapFill({ trdSide: 1, fillID: 1, orderID: 1, code: "EURUSD", qty: 1, price: 1, createTimestamp: 1, secMarket: 91 }, "a", 1);
+  expect(f.currency).toBe("UNKNOWN"); // segmented safely, not HKD
+});
+
+test("ambiguous SH/SZ secMarket resolves to HKCC only when the query says so, else mainland CN", () => {
+  const hkcc = mapFill({ trdSide: 1, fillID: 1, orderID: 1, code: "600000", qty: 1, price: 1, createTimestamp: 1, secMarket: 31 }, "a", 4);
+  expect(hkcc.symbol).toBe("HK.600000"); // queried HKCC(4) disambiguates; currency CNH
+  expect(hkcc.currency).toBe("CNH");
+  const cn = mapFill({ trdSide: 1, fillID: 1, orderID: 1, code: "600000", qty: 1, price: 1, createTimestamp: 1, secMarket: 31 }, "a");
+  expect(cn.symbol).toBe("CN.600000"); // no query context → mainland CN default; currency CNH
+  expect(cn.currency).toBe("CNH");
 });
 
 test("mapFill maps a US buy fill (fee defaults to 0, currency from market, ms from timestamp)", () => {

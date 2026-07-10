@@ -112,16 +112,27 @@ export function orderStatusName(orderStatus: number): string {
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-// protobufjs surfaces omitted optional numeric fields as their proto default 0 (not undefined),
-// so `??` won't fall back. `secMarket` is a LAST resort (its TrdSecMarket enum only coincides with
-// TrdMarket for HK=1/US=2), so callers that know the queried market should pass it — see resolveMarket.
-function marketOf(raw: any): number {
-  return raw.trdMarket || raw.secMarket || 0;
-}
+// TrdSecMarket enum → TrdMarket enum (they only coincide for HK=1/US=2).
+const SEC_TO_TRD: Record<number, number> = {
+  1: 1, 2: 2, 31: 3, 32: 3, 41: 6, 51: 15, 61: 8, 71: 111, 81: 112, 101: 7,
+};
 
-/** The authoritative queried market (from the sync loop) wins; the row's own fields are a fallback. */
-function resolveMarket(raw: any, market: number | undefined): number {
-  return market && market > 0 ? market : marketOf(raw);
+// A row's OWN trdMarket is authoritative. OpenD returns an account's fills/orders across market-header
+// queries WITHOUT filtering (verified live: querying trdMarket 1/2/15 all return the same US fills,
+// each carrying trdMarket=2), so the queried market must NOT override a present trdMarket.
+// protobufjs surfaces omitted optional numerics as 0 (not undefined), so `raw.trdMarket` truthiness
+// correctly detects presence.
+function resolveMarket(raw: any, queriedMarket: number | undefined): number {
+  if (raw.trdMarket) return raw.trdMarket; // authoritative — always present in real OpenD data
+  const sec = raw.secMarket;
+  // SH/SZ A-shares: secMarket 31/32 is ambiguous between mainland CN (3) and HKCC (4); the query
+  // context disambiguates when it's specifically HKCC, otherwise default to mainland CN.
+  if (sec === 31 || sec === 32) return queriedMarket === 4 ? 4 : 3;
+  // A mapped secMarket is the row's own market. A NONZERO-but-unmapped secMarket (e.g. FX=91 has no
+  // TrdMarket) becomes 0/UNKNOWN — segments safely rather than borrowing the query's wrong currency.
+  if (sec) return SEC_TO_TRD[sec] ?? 0;
+  // No market on the row at all → the queried market is the only signal left.
+  return queriedMarket && queriedMarket > 0 ? queriedMarket : 0;
 }
 
 /** OrderFillStatus: 0=OK, 1=Cancelled, 2=Changed. A cancelled fill never executed — exclude it

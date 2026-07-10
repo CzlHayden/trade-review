@@ -73,8 +73,11 @@ export async function connectFutu(opts: ConnectOpts = {}): Promise<FutuClient> {
 
   return {
     async getAccounts(): Promise<Account[]> {
+      // needGeneralSecAccount: true is REQUIRED to return HK/US/SG/AU "comprehensive" securities
+      // accounts (保证金综合账户 / 现金综合账户). Without it OpenD omits the real stock account and
+      // only returns e.g. a crypto account — verified live against Keith's OpenD.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const resp: any = await ws.GetAccList({ c2s: { userID: 0 } });
+      const resp: any = await ws.GetAccList({ c2s: { userID: 0, needGeneralSecAccount: true } });
       const list = resp?.s2c?.accList ?? [];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return list.map((a: any) => {
