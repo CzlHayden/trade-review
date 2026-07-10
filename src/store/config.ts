@@ -9,7 +9,7 @@ export function getRuleConfig(db: Database): RuleConfig {
   const row = db.query("SELECT value FROM config WHERE key = ?").get(RULES_KEY) as
     | { value: string }
     | null;
-  if (!row) return { ...DEFAULT_RULE_CONFIG };
+  if (!row) return { ...DEFAULT_RULE_CONFIG, enabled: { ...DEFAULT_RULE_CONFIG.enabled } };
   const stored = JSON.parse(row.value) as Partial<RuleConfig>;
   return {
     ...DEFAULT_RULE_CONFIG,

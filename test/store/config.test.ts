@@ -27,6 +27,15 @@ test("getRuleConfig merges stored overrides onto defaults (new default keys surv
   expect(cfg.enabled).toEqual({}); // absent → default
 });
 
+test("default config is a fresh copy — mutating it never corrupts module defaults", () => {
+  const db = openTestDb();
+  const cfg = getRuleConfig(db); // no stored row → defaults
+  cfg.enabled.cut_winner_early = false; // caller mutates before saving
+  // A second fresh read must be unaffected by the mutation above.
+  expect(getRuleConfig(db).enabled).toEqual({});
+  expect(DEFAULT_RULE_CONFIG.enabled).toEqual({});
+});
+
 test("setRuleConfig overwrites the previous value (single row)", () => {
   const db = openTestDb();
   setRuleConfig(db, { ...DEFAULT_RULE_CONFIG, roundTripR: 2 });
