@@ -1,4 +1,4 @@
-import type { RawFill, Side } from "../src/domain/types";
+import type { RawFill, SeedPosition, Side } from "../src/domain/types";
 
 let seq = 0;
 /** Concise fill builder. time defaults to a monotonically increasing minute. */
@@ -15,5 +15,17 @@ export function fill(side: Side, qty: number, price: number, over: Partial<RawFi
     currency: over.currency ?? "USD",
     time: over.time ?? seq * 60_000,
     account: over.account ?? "acc1",
+  };
+}
+
+/** Concise seed-position builder. `qty` is signed (+long / -short); `avgCost` is per-share basis. */
+export function seedPos(qty: number, avgCost: number, over: Partial<SeedPosition> = {}): SeedPosition {
+  return {
+    account: over.account ?? "acc1",
+    symbol: over.symbol ?? "AAPL",
+    qty,
+    avgCost,
+    currency: over.currency ?? "USD",
+    time: over.time ?? 0,
   };
 }

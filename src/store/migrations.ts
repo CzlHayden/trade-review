@@ -46,6 +46,13 @@ function setVersion(db: Database, version: number): void {
 /** Apply every migration whose 1-based index exceeds the current version. */
 export function runMigrations(db: Database): void {
   const from = currentVersion(db);
+  if (from > MIGRATIONS.length) {
+    // An older binary opened a DB written by a newer one (possible with self-update).
+    // Refuse rather than run against an unknown schema.
+    throw new Error(
+      `Database schema version ${from} is newer than this app supports (${MIGRATIONS.length}). Please update the app.`,
+    );
+  }
   for (let i = from; i < MIGRATIONS.length; i++) {
     const migrate = MIGRATIONS[i]!;
     db.transaction(() => {
