@@ -8,7 +8,7 @@
 import ftWebsocket from "futu-api";
 import type { Account, FutuClient } from "../domain/ports";
 import type { RawFill, RawOrder, RawPosition } from "../domain/types";
-import { mapAccount, mapFill, mapOrder, mapPosition, TRD_ENV_REAL } from "./map";
+import { isCancelledFill, mapAccount, mapFill, mapOrder, mapPosition, TRD_ENV_REAL } from "./map";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -94,8 +94,11 @@ export async function connectFutu(opts: ConnectOpts = {}): Promise<FutuClient> {
       const resp: any = await ws.GetHistoryOrderFillList({
         c2s: { header: header(account, market), filterConditions: { beginTime: fmtFutu(beginMs), endTime: fmtFutu(endMs) } },
       });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return (resp?.s2c?.orderFillList ?? []).map((f: any) => mapFill(f, account.id, market));
+      return (resp?.s2c?.orderFillList ?? [])
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .filter((f: any) => !isCancelledFill(f)) // drop cancelled fills — never executed
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .map((f: any) => mapFill(f, account.id, market));
     },
 
     async getHistoryOrders(account, market, beginMs, endMs): Promise<RawOrder[]> {

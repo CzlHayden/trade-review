@@ -124,6 +124,12 @@ function resolveMarket(raw: any, market: number | undefined): number {
   return market && market > 0 ? market : marketOf(raw);
 }
 
+/** OrderFillStatus: 0=OK, 1=Cancelled, 2=Changed. A cancelled fill never executed — exclude it
+ * before building trades, or its qty/price corrupts positions and realized P&L. (0 default = keep.) */
+export function isCancelledFill(raw: any): boolean {
+  return raw.status === 1;
+}
+
 export function mapFill(raw: any, account: string, market?: number): RawFill {
   const mkt = resolveMarket(raw, market);
   return {

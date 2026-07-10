@@ -7,6 +7,7 @@ import {
   currencyForMarket,
   futuSymbol,
   marketName,
+  isCancelledFill,
 } from "../../src/futu/map";
 
 test("futuSymbol / currencyForMarket / marketName normalize by market", () => {
@@ -49,6 +50,13 @@ test("mapFill maps a US buy fill (fee defaults to 0, currency from market, ms fr
     id: "123", orderId: "456", symbol: "US.AAPL", side: "BUY", qty: 100, price: 10.5,
     fee: 0, currency: "USD", time: 1_700_000_000_000, account: "acc1",
   });
+});
+
+test("isCancelledFill flags only OrderFillStatus_Cancelled (1); OK(0)/Changed(2)/absent are kept", () => {
+  expect(isCancelledFill({ status: 1 })).toBe(true);
+  expect(isCancelledFill({ status: 0 })).toBe(false);
+  expect(isCancelledFill({ status: 2 })).toBe(false);
+  expect(isCancelledFill({})).toBe(false); // absent → proto default 0 (OK)
 });
 
 test("mapFill treats SellShort as SELL", () => {
