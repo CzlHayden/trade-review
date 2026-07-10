@@ -21,11 +21,14 @@ export interface SeedPosition {
   account: string;
   symbol: string;
   qty: number; // signed: positive = long, negative = short
+  avgCost: number; // cost basis per share from the snapshot (so seeded PnL/avgEntry are sane)
+  currency: string;
+  time: number; // epoch ms of the snapshot (used as openTime when there are no fills)
 }
 
 /** A reconstructed round-trip trade. */
 export interface Trade {
-  id: string; // deterministic: `${account}:${symbol}:${openTime}`
+  id: string; // deterministic: `${account}:${symbol}:${openTime}:${openingFillId}` (collision-safe)
   account: string;
   symbol: string;
   currency: string;

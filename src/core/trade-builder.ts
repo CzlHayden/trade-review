@@ -1,11 +1,15 @@
 import type { Direction, RawFill, SeedPosition, Trade } from "../domain/types";
 
+/** Tolerance for position comparisons — fractional shares make exact 0 unreliable. */
+const EPS = 1e-9;
+
 interface Acc {
   account: string;
   symbol: string;
   currency: string;
   direction: Direction;
   openTime: number;
+  openId: string; // id of the opening fill (or "seed") — makes the trade id collision-safe
   entryQty: number;
   entryValue: number;
   exitQty: number;
@@ -18,8 +22,12 @@ interface Acc {
   coverageOk: boolean;
 }
 
+function isZero(n: number): boolean {
+  return Math.abs(n) < EPS;
+}
+
 function sign(n: number): number {
-  return n === 0 ? 0 : n > 0 ? 1 : -1;
+  return isZero(n) ? 0 : n > 0 ? 1 : -1;
 }
 
 function groupKey(f: { account: string; symbol: string }): string {
@@ -33,6 +41,7 @@ function newAcc(f: RawFill, direction: Direction, coverageOk: boolean): Acc {
     currency: f.currency,
     direction,
     openTime: f.time,
+    openId: f.id,
     entryQty: 0,
     entryValue: 0,
     exitQty: 0,
@@ -43,6 +52,29 @@ function newAcc(f: RawFill, direction: Direction, coverageOk: boolean): Acc {
     fillIds: [],
     lastTime: f.time,
     coverageOk,
+  };
+}
+
+/** Build an accumulator seeded from a pre-existing position snapshot (coverage is incomplete). */
+function seedAcc(seed: SeedPosition): Acc {
+  const qtyAbs = Math.abs(seed.qty);
+  return {
+    account: seed.account,
+    symbol: seed.symbol,
+    currency: seed.currency,
+    direction: seed.qty > 0 ? "LONG" : "SHORT",
+    openTime: seed.time,
+    openId: "seed",
+    entryQty: qtyAbs,
+    entryValue: qtyAbs * seed.avgCost, // real cost basis → sane avgEntry/PnL
+    exitQty: 0,
+    exitValue: 0,
+    fees: 0,
+    maxQty: qtyAbs,
+    position: seed.qty,
+    fillIds: [],
+    lastTime: seed.time,
+    coverageOk: false,
   };
 }
 
@@ -68,7 +100,7 @@ function applyExit(acc: Acc, f: RawFill, qty: number): void {
 }
 
 function finalize(acc: Acc): Trade {
-  const closed = acc.position === 0;
+  const closed = isZero(acc.position);
   const avgEntry = acc.entryQty > 0 ? acc.entryValue / acc.entryQty : 0;
   const avgExit = acc.exitQty > 0 ? acc.exitValue / acc.exitQty : null;
   let realizedPnl: number | null = null;
@@ -79,7 +111,7 @@ function finalize(acc: Acc): Trade {
         : acc.entryValue - acc.exitValue - acc.fees;
   }
   return {
-    id: `${acc.account}:${acc.symbol}:${acc.openTime}`,
+    id: `${acc.account}:${acc.symbol}:${acc.openTime}:${acc.openId}`,
     account: acc.account,
     symbol: acc.symbol,
     currency: acc.currency,
@@ -99,39 +131,45 @@ function finalize(acc: Acc): Trade {
 }
 
 export function buildTrades(fills: RawFill[], seeds: SeedPosition[] = []): Trade[] {
-  const seedMap = new Map<string, number>();
-  for (const s of seeds) seedMap.set(groupKey(s), s.qty);
+  const seedMap = new Map<string, SeedPosition>();
+  for (const s of seeds) seedMap.set(groupKey(s), s);
 
   const groups = new Map<string, RawFill[]>();
   for (const f of fills) {
+    if (f.qty <= 0) continue; // skip zero/negative-qty fills (would make fee proration NaN)
     const k = groupKey(f);
-    (groups.get(k) ?? groups.set(k, []).get(k)!).push(f);
+    let arr = groups.get(k);
+    if (!arr) {
+      arr = [];
+      groups.set(k, arr);
+    }
+    arr.push(f);
   }
 
+  // Process every symbol that has fills OR a seeded position (so held-but-inactive positions survive).
+  const keys = new Set<string>([...groups.keys(), ...seedMap.keys()]);
   const trades: Trade[] = [];
 
-  for (const [key, groupFills] of groups) {
-    groupFills.sort((a, b) => a.time - b.time);
-    const seedQty = seedMap.get(key) ?? 0;
+  for (const key of keys) {
+    const groupFills = (groups.get(key) ?? [])
+      .slice()
+      .sort((a, b) => a.time - b.time || a.id.localeCompare(b.id)); // stable tie-break
+    const seed = seedMap.get(key);
 
     let position = 0;
     let acc: Acc | null = null;
 
-    // Seed a pre-existing position: open an accumulator whose entry is unknown.
-    if (seedQty !== 0) {
-      const first = groupFills[0]!;
-      acc = newAcc(first, seedQty > 0 ? "LONG" : "SHORT", false);
-      acc.entryQty = Math.abs(seedQty);
-      acc.position = seedQty;
-      acc.maxQty = Math.abs(seedQty);
-      acc.openTime = first.time; // best available; coverageOk=false marks it approximate
-      position = seedQty;
+    if (seed && !isZero(seed.qty)) {
+      acc = seedAcc(seed);
+      // Use the first fill's time as the (approximate) open time so hold time isn't negative.
+      if (groupFills.length > 0) acc.openTime = groupFills[0]!.time;
+      position = seed.qty;
     }
 
     for (const f of groupFills) {
       const signed = f.side === "BUY" ? f.qty : -f.qty;
 
-      if (position === 0) {
+      if (isZero(position)) {
         acc = newAcc(f, signed > 0 ? "LONG" : "SHORT", true);
         applyEntry(acc, f, f.qty);
         position = acc.position;
@@ -145,10 +183,10 @@ export function buildTrades(fills: RawFill[], seeds: SeedPosition[] = []): Trade
       }
 
       // reducing
-      if (Math.abs(signed) <= Math.abs(position)) {
+      if (Math.abs(signed) <= Math.abs(position) + EPS) {
         applyExit(acc!, f, f.qty);
         position = acc!.position;
-        if (position === 0) {
+        if (isZero(position)) {
           trades.push(finalize(acc!));
           acc = null;
         }
@@ -164,7 +202,7 @@ export function buildTrades(fills: RawFill[], seeds: SeedPosition[] = []): Trade
       }
     }
 
-    if (acc && position !== 0) trades.push(finalize(acc)); // leftover open trade
+    if (acc && !isZero(position)) trades.push(finalize(acc)); // leftover open trade
   }
 
   return trades;

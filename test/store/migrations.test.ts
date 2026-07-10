@@ -32,3 +32,11 @@ test("running migrations twice is idempotent", () => {
   runMigrations(db); // second run applies nothing
   expect(currentVersion(db)).toBe(v1);
 });
+
+test("refuses to run against a db newer than the app supports", () => {
+  const db = memDb();
+  runMigrations(db);
+  db.run("DELETE FROM schema_version;");
+  db.run("INSERT INTO schema_version (version) VALUES (?);", [MIGRATIONS.length + 5]);
+  expect(() => runMigrations(db)).toThrow(/newer than this app supports/);
+});
