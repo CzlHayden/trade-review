@@ -73,6 +73,7 @@ export interface RawOrder {
   triggerPrice: number | null; // stop trigger; null for non-stop orders
   status: string; // raw FUTU status string (e.g. "FILLED_ALL", "CANCELLED_ALL")
   createTime: number; // epoch ms
+  updateTime: number | null; // epoch ms of last modification (a moved stop bumps this, not createTime)
   account: string;
 }
 
@@ -88,6 +89,10 @@ export interface Candle {
 
 /** Output of stop inference for one trade. */
 export interface StopInfo {
-  effectiveStop: number | null;
+  initialStop: number | null; // earliest protective stop — the planned risk (use for R-multiple)
+  effectiveStop: number | null; // latest protective stop — what was actually protecting at the end
   effectiveTp: number | null;
+  stopOrderId: string | null; // id of the order behind effectiveStop (provenance)
+  stopQty: number | null; // qty that stop covered (may be < position size)
+  receipt: string | null; // plain-English explanation of the matched stop (spec §6)
 }

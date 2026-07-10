@@ -46,8 +46,9 @@ export function order(
     qty,
     price: over.price ?? null,
     triggerPrice: over.triggerPrice ?? null,
-    status: over.status ?? "CANCELLED_ALL",
+    status: over.status ?? "SUBMITTED",
     createTime: over.createTime ?? oseq * 60_000,
+    updateTime: over.updateTime ?? null,
     account: over.account ?? "acc1",
   };
 }

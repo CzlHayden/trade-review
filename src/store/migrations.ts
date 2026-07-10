@@ -44,7 +44,7 @@ export const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
       CREATE TABLE raw_orders (
         id TEXT PRIMARY KEY, symbol TEXT NOT NULL, side TEXT NOT NULL, type TEXT NOT NULL,
         qty REAL NOT NULL, price REAL, trigger_price REAL,
-        status TEXT NOT NULL, create_time INTEGER NOT NULL, account TEXT NOT NULL
+        status TEXT NOT NULL, create_time INTEGER NOT NULL, update_time INTEGER, account TEXT NOT NULL
       );
     `);
     db.run(`
