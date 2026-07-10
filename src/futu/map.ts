@@ -113,29 +113,35 @@ export function orderStatusName(orderStatus: number): string {
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 // protobufjs surfaces omitted optional numeric fields as their proto default 0 (not undefined),
-// so `??` won't fall back. Treat 0/absent as "missing" and prefer trdMarket, then secMarket.
+// so `??` won't fall back. `secMarket` is a LAST resort (its TrdSecMarket enum only coincides with
+// TrdMarket for HK=1/US=2), so callers that know the queried market should pass it — see resolveMarket.
 function marketOf(raw: any): number {
   return raw.trdMarket || raw.secMarket || 0;
 }
 
-export function mapFill(raw: any, account: string): RawFill {
-  const market = marketOf(raw);
+/** The authoritative queried market (from the sync loop) wins; the row's own fields are a fallback. */
+function resolveMarket(raw: any, market: number | undefined): number {
+  return market && market > 0 ? market : marketOf(raw);
+}
+
+export function mapFill(raw: any, account: string, market?: number): RawFill {
+  const mkt = resolveMarket(raw, market);
   return {
     id: String(raw.fillID),
     orderId: String(raw.orderID),
-    symbol: futuSymbol(raw.code, market),
+    symbol: futuSymbol(raw.code, mkt),
     side: sideFrom(raw.trdSide),
     qty: raw.qty,
     price: raw.price,
     fee: 0, // v1: fills carry no fee (see file header)
-    currency: currencyForMarket(market),
+    currency: currencyForMarket(mkt),
     time: toMs(raw.createTimestamp, raw.createTime),
     account,
   };
 }
 
-export function mapOrder(raw: any, account: string): RawOrder {
-  const market = marketOf(raw);
+export function mapOrder(raw: any, account: string, market?: number): RawOrder {
+  const mkt = resolveMarket(raw, market);
   const type = orderTypeFrom(raw.orderType);
   // `> 0` (not `??`): protobufjs decodes an omitted auxPrice/price as 0. A trigger/limit is never 0,
   // and a triggerPrice of 0 would read as a live "stop @ 0" → absurd risk and poisoned flags.
@@ -144,7 +150,7 @@ export function mapOrder(raw: any, account: string): RawOrder {
   const price = type === "MARKET" || type === "STOP" ? null : raw.price > 0 ? raw.price : null;
   return {
     id: String(raw.orderID),
-    symbol: futuSymbol(raw.code, market),
+    symbol: futuSymbol(raw.code, mkt),
     side: sideFrom(raw.trdSide),
     type,
     qty: raw.qty,
@@ -160,17 +166,17 @@ export function mapOrder(raw: any, account: string): RawOrder {
   };
 }
 
-export function mapPosition(raw: any, account: string, snapshotMs: number): RawPosition {
-  const market = marketOf(raw);
+export function mapPosition(raw: any, account: string, snapshotMs: number, market?: number): RawPosition {
+  const mkt = resolveMarket(raw, market);
   const qtyAbs = raw.qty;
   // `||` (not `??`): omitted cost fields arrive as 0 from protobufjs; a real cost is never 0.
   const avgCost = raw.averageCostPrice || raw.dilutedCostPrice || raw.costPrice || 0;
   return {
     account,
-    symbol: futuSymbol(raw.code, market),
+    symbol: futuSymbol(raw.code, mkt),
     qty: raw.positionSide === 1 ? -qtyAbs : qtyAbs, // PositionSide: 1 = Short
     avgCost,
-    currency: currencyForEnum(raw.currency) !== "UNKNOWN" ? currencyForEnum(raw.currency) : currencyForMarket(market),
+    currency: currencyForEnum(raw.currency) !== "UNKNOWN" ? currencyForEnum(raw.currency) : currencyForMarket(mkt),
     time: snapshotMs,
   };
 }

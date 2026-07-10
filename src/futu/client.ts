@@ -70,7 +70,7 @@ export async function connectFutu(opts: ConnectOpts = {}): Promise<FutuClient> {
         c2s: { header: header(account, market), filterConditions: { beginTime: fmtFutu(beginMs), endTime: fmtFutu(endMs) } },
       });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return (resp?.s2c?.orderFillList ?? []).map((f: any) => mapFill(f, account.id));
+      return (resp?.s2c?.orderFillList ?? []).map((f: any) => mapFill(f, account.id, market));
     },
 
     async getHistoryOrders(account, market, beginMs, endMs): Promise<RawOrder[]> {
@@ -80,7 +80,7 @@ export async function connectFutu(opts: ConnectOpts = {}): Promise<FutuClient> {
         c2s: { header: header(account, market), filterConditions: { beginTime: fmtFutu(beginMs), endTime: fmtFutu(endMs) } },
       });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return (resp?.s2c?.orderList ?? []).map((o: any) => mapOrder(o, account.id));
+      return (resp?.s2c?.orderList ?? []).map((o: any) => mapOrder(o, account.id, market));
     },
 
     async getPositions(account, market): Promise<RawPosition[]> {
@@ -89,11 +89,14 @@ export async function connectFutu(opts: ConnectOpts = {}): Promise<FutuClient> {
       const resp: any = await ws.GetPositionList({ c2s: { header: header(account, market) } });
       // sync overrides `time` with its snapshot clock; 0 here is a placeholder.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return (resp?.s2c?.positionList ?? []).map((p: any) => mapPosition(p, account.id, 0));
+      return (resp?.s2c?.positionList ?? []).map((p: any) => mapPosition(p, account.id, 0, market));
     },
 
     close() {
+      // stop() only unregisters push callbacks; close() kills the reconnect timer and closes the
+      // underlying socket (see node_modules/futu-api base.js) — call both so no socket leaks.
       ws.stop();
+      ws.close?.();
     },
   };
 }

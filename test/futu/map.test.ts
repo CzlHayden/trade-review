@@ -33,6 +33,13 @@ test("mappers treat SDK default-zero market/cost as absent (protobufjs quirk)", 
   expect(p.avgCost).toBe(7);
 });
 
+test("an explicit queried market overrides the row's own market fields (avoids secMarket ambiguity)", () => {
+  // Row carries a TrdSecMarket value (AU=61) that isn't a TrdMarket; the queried market (8=AU) wins.
+  const f = mapFill({ trdSide: 1, fillID: 1, orderID: 1, code: "BHP", qty: 1, price: 1, createTimestamp: 1, secMarket: 61 }, "a", 8);
+  expect(f.symbol).toBe("AU.BHP");
+  expect(f.currency).toBe("AUD");
+});
+
 test("mapFill maps a US buy fill (fee defaults to 0, currency from market, ms from timestamp)", () => {
   const f = mapFill(
     { trdSide: 1, fillID: 123, orderID: 456, code: "AAPL", qty: 100, price: 10.5, createTimestamp: 1_700_000_000, trdMarket: 2 },
