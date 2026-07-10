@@ -115,8 +115,6 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
   // FUTU returns real AND simulate accounts; only real ones have queryable history and belong in
   // the review DB. Sync only recognized markets (skip futures/funds/unknown).
   const accounts = (await client.getAccounts()).filter((a) => a.trdEnv === TRD_ENV_REAL);
-  let fillCount = 0;
-  let orderCount = 0;
 
   for (const acc of accounts) {
     const snapshot: RawPosition[] = [];
@@ -130,7 +128,6 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
 
       const fills = await client.getHistoryFills(acc, market, beginMs, endMs);
       if (fills.length) upsertRawFills(db, fills);
-      fillCount += fills.length;
 
       // Orders MUTATE after creation (a trailed/cancelled stop changes status + auxPrice), and FUTU
       // filters history orders by CREATE time — so an incremental window would never refetch a moved
@@ -138,7 +135,6 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
       // historyDays whose stop moved recently still won't refresh — acceptable for v1 swing horizons.
       const orders = await client.getHistoryOrders(acc, market, fullWindowBegin, endMs);
       if (orders.length) upsertRawOrders(db, orders);
-      orderCount += orders.length;
 
       const positions = await client.getPositions(acc, market);
       for (const p of positions) snapshot.push({ ...p, time: now }); // stamp one coherent batch time
@@ -223,10 +219,12 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
 
   let flagCount = 0;
   for (const f of flagMap.values()) flagCount += f.length;
+  // Report DISTINCT stored rows: OpenD returns an account's rows across every market-header query,
+  // so a per-pull sum would double-count. allFills/allOrders are deduped by primary key.
   return {
     accounts: accounts.length,
-    fills: fillCount,
-    orders: orderCount,
+    fills: allFills.length,
+    orders: allOrders.length,
     trades: enrichedTrades.length,
     flags: flagCount,
   };
