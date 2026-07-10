@@ -94,9 +94,13 @@ export async function connectFutu(opts: ConnectOpts = {}): Promise<FutuClient> {
       const resp: any = await ws.GetHistoryOrderFillList({
         c2s: { header: header(account, market), filterConditions: { beginTime: fmtFutu(beginMs), endTime: fmtFutu(endMs) } },
       });
+      // Drop cancelled fills — never executed, so they must not reach trade-builder. LIMITATION:
+      // this only prevents a cancelled fill from being *stored*; a fill persisted OK on an earlier
+      // sync and later returned as cancelled won't be deleted from raw_fills here (needs resync
+      // reconciliation — tracked as a follow-up).
       return (resp?.s2c?.orderFillList ?? [])
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .filter((f: any) => !isCancelledFill(f)) // drop cancelled fills — never executed
+        .filter((f: any) => !isCancelledFill(f))
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .map((f: any) => mapFill(f, account.id, market));
     },

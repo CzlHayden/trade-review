@@ -137,10 +137,17 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
     const bars = await candles.getCandles(t.symbol, from, to, resMs);
     const excursion = computeExcursion(t, bars, resMs);
     // Degrade safely: if candles are unavailable this run, keep any excursion computed on a prior
-    // sync rather than nulling it (which would silently drop mae/mfe-dependent flags).
+    // sync rather than nulling it (which would silently drop mae/mfe-dependent flags). But ONLY when
+    // the trade's window/shape is unchanged — a trade whose id persisted while it gained fills (e.g.
+    // open → closed, or scaled) has a different window, so the old excursion would be stale.
     const priorT = prior.get(t.id);
-    const mae = excursion.mae ?? priorT?.mae ?? null;
-    const mfe = excursion.mfe ?? priorT?.mfe ?? null;
+    const sameShape =
+      priorT !== undefined &&
+      priorT.closeTime === t.closeTime &&
+      priorT.avgEntry === t.avgEntry &&
+      priorT.maxQty === t.maxQty;
+    const mae = excursion.mae ?? (sameShape ? priorT.mae : null);
+    const mfe = excursion.mfe ?? (sameShape ? priorT.mfe : null);
 
     const enriched: Trade = {
       ...t,

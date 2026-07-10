@@ -184,6 +184,25 @@ test("runSync carries forward MAE/MFE when candles degrade (no silent regression
   expect(t.mfe).toBe(3);
 });
 
+test("runSync does NOT carry forward MAE/MFE when the trade shape changed (open → closed)", async () => {
+  const db = openTestDb();
+  const buy = { id: "f1", orderId: "o1", symbol: "US.AAPL", side: "BUY" as const, qty: 100, price: 10, fee: 0, currency: "USD", time: 1000, account: "acc1" };
+  const sell = { id: "f2", orderId: "o2", symbol: "US.AAPL", side: "SELL" as const, qty: 100, price: 11, fee: 0, currency: "USD", time: 5000, account: "acc1" };
+  const withCandles: CandleSource = {
+    getCandles: async () => [{ time: 1000, open: 10, high: 13, low: 8, close: 11, volume: 1 }],
+  };
+  // sync 1: only the opening BUY → trade is OPEN; candles present → mae computed on the open window.
+  await runSync({ db, client: stubClient({ getHistoryFills: async () => [buy] }), candles: withCandles, config: DEFAULT_RULE_CONFIG, now: 10_000 });
+  expect(allTrades(db)[0]!.status).toBe("open");
+  // sync 2: the exit arrives (same trade id, new shape) during a candle outage → must NOT reuse the
+  // open-window excursion; leave null until candles are available for the closed window.
+  await runSync({ db, client: stubClient({ getHistoryFills: async () => [buy, sell] }), candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 20_000 });
+  const t = allTrades(db)[0]!;
+  expect(t.status).toBe("closed");
+  expect(t.mae).toBeNull();
+  expect(t.mfe).toBeNull();
+});
+
 test("runSync is idempotent — re-running the same data yields the same single trade", async () => {
   const db = openTestDb();
   const client = stubClient({
