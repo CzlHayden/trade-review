@@ -62,6 +62,21 @@ export const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
       );
     `);
   },
+  // v3 — computed flags + config key/value store
+  (db) => {
+    db.run(`
+      CREATE TABLE flags (
+        trade_id TEXT NOT NULL, rule_id TEXT NOT NULL,
+        severity TEXT NOT NULL, reason TEXT NOT NULL,
+        PRIMARY KEY (trade_id, rule_id)
+      );
+    `);
+    db.run(`
+      CREATE TABLE config (
+        key TEXT PRIMARY KEY, value TEXT NOT NULL
+      );
+    `);
+  },
 ];
 
 export function currentVersion(db: Database): number {
