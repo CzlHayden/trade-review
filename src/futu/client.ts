@@ -24,6 +24,7 @@ export interface ConnectOpts {
   port?: number;
   key?: string;
   paceMs?: number; // delay before each history/position call to respect FUTU rate limits
+  connectTimeoutMs?: number; // fail the connect if OpenD never logs us in (default 10s)
 }
 
 export async function connectFutu(opts: ConnectOpts = {}): Promise<FutuClient> {
@@ -31,13 +32,37 @@ export async function connectFutu(opts: ConnectOpts = {}): Promise<FutuClient> {
   const port = opts.port ?? 33334;
   const key = opts.key;
   const paceMs = opts.paceMs ?? 350;
+  const connectTimeoutMs = opts.connectTimeoutMs ?? 10_000;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ws: any = new ftWebsocket();
 
   await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    // If OpenD isn't listening, onlogin never fires and futu-api just keeps reconnecting — without
+    // this timeout the CLI would hang forever instead of surfacing SYNC FAILED.
+    const timer = setTimeout(
+      () =>
+        done(() =>
+          reject(new Error(`OpenD connection timed out after ${connectTimeoutMs}ms — is OpenD running on ws://${host}:${port}?`)),
+        ),
+      connectTimeoutMs,
+    );
     ws.onlogin = (ok: boolean, msg: unknown) =>
-      ok ? resolve() : reject(new Error(`OpenD login failed: ${JSON.stringify(msg)}`));
+      done(() => (ok ? resolve() : reject(new Error(`OpenD login failed: ${JSON.stringify(msg)}`))));
     ws.start(host, port, false, key); // (ip, port, ssl=false, plaintext key)
+    // Best-effort fast-fail on an abnormal socket error/close before login (down / wrong port).
+    // These are the user-hook seams on the base socket (base.js forwards to them); safe to set and
+    // guarded by `settled` so they never fire after a successful login.
+    if (ws.websock) {
+      ws.websock.onerror = () => done(() => reject(new Error(`OpenD socket error (ws://${host}:${port})`)));
+      ws.websock.onclose = () => done(() => reject(new Error(`OpenD socket closed before login (ws://${host}:${port})`)));
+    }
   });
 
   // Preserve the raw SDK account object (its accID is a uint64 we must echo back verbatim rather
@@ -93,10 +118,11 @@ export async function connectFutu(opts: ConnectOpts = {}): Promise<FutuClient> {
     },
 
     close() {
-      // stop() only unregisters push callbacks; close() kills the reconnect timer and closes the
-      // underlying socket (see node_modules/futu-api base.js) — call both so no socket leaks.
+      // stop() only unregisters push callbacks. The real socket + reconnect timer live on the base
+      // socket ws.websock (an ftWebsocketBase); its close() kills the reconnect timer and closes the
+      // connection (base.js). ftWebsocket itself has no close(), so we must reach ws.websock.
       ws.stop();
-      ws.close?.();
+      ws.websock?.close?.();
     },
   };
 }
