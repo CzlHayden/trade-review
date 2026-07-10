@@ -26,6 +26,24 @@ export interface SeedPosition {
   time: number; // epoch ms of the snapshot (used as openTime when there are no fills)
 }
 
+/** A stored position snapshot row (raw_positions). One per (account, symbol, snapshot time). */
+export interface RawPosition {
+  account: string;
+  symbol: string;
+  qty: number; // signed: positive = long, negative = short
+  avgCost: number;
+  currency: string;
+  time: number; // epoch ms of the snapshot
+}
+
+/** Sync cursor for one (account, market). Persisted so re-syncs are incremental. */
+export interface SyncState {
+  account: string;
+  market: string;
+  lastSyncedTime: number | null; // epoch ms of the newest raw row pulled so far
+  coverageStart: number | null; // epoch ms of the oldest raw row we have (history floor)
+}
+
 /** A reconstructed round-trip trade. */
 export interface Trade {
   id: string; // deterministic: `${account}:${symbol}:${openTime}:${openingFillId}` (collision-safe)
