@@ -11,12 +11,14 @@ import {
   allRawFills,
   allRawOrders,
   allTrades,
+  flagsForTrade,
   insertPositionSnapshot,
   positionsAt,
   replaceDerived,
   upsertRawFills,
   upsertRawOrders,
 } from "../store/repos";
+import { manualStops } from "../store/journal";
 import { getSyncState, upsertSyncState } from "../store/sync-state";
 
 const DAY_MS = 86_400_000;
@@ -104,13 +106,17 @@ function recentClosedTrades(prior: Trade[], t: Trade): Trade[] {
 }
 
 /**
- * Pull raw data from OpenD, persist it, then rebuild all derived trades/flags from the full raw
- * set. Idempotent: raw upserts are keyed, derived data is fully replaced. Candle-fetch failure
- * degrades to no MAE/MFE (never breaks the sync).
+ * Phase 1 — pull raw data from OpenD and persist it (raw upserts are keyed/idempotent). Touches
+ * the network; does NOT rebuild derived data. Returns the count of real accounts pulled so the
+ * `runSync` wrapper can assemble its summary.
  */
-export async function runSync(deps: SyncDeps): Promise<SyncResult> {
-  const { db, client, candles, config, now } = deps;
-  const historyDays = deps.historyDays ?? 90;
+export async function pullRaw(
+  db: Database,
+  client: FutuClient,
+  opts: { now: number; historyDays?: number },
+): Promise<{ accounts: number }> {
+  const { now } = opts;
+  const historyDays = opts.historyDays ?? 90;
 
   // FUTU returns real AND simulate accounts; only real ones have queryable history and belong in
   // the review DB. Sync only recognized markets (skip futures/funds/unknown).
@@ -150,7 +156,21 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
     insertPositionSnapshot(db, snapshot);
   }
 
-  // ---- rebuild derived from the full raw set ----
+  return { accounts: accounts.length };
+}
+
+/**
+ * Phase 2 — rebuild ALL derived trades/flags from the full raw set. Pure of the network: it reads
+ * only the local DB (+ candles) and fully replaces derived data, so it is also the recompute path
+ * for a manual-stop or rule-config edit (no OpenD round-trip). Candle-fetch failure degrades to no
+ * MAE/MFE. A user-entered manual stop (journal) overrides the order-inferred stop for risk/R/flags.
+ */
+export async function rebuildDerived(
+  db: Database,
+  opts: { candles: CandleSource; config: RuleConfig; now: number },
+): Promise<void> {
+  const { candles, config, now } = opts;
+
   // Prior derived trades, keyed by id — used to carry forward MAE/MFE if candles degrade this run,
   // so a transient Yahoo outage can't overwrite previously-correct excursions (and the flags that
   // depend on them) with nulls. Trade ids are deterministic, so an unchanged trade keeps its key.
@@ -158,6 +178,7 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
 
   const allFills = allRawFills(db);
   const allOrders = allRawOrders(db);
+  const manual = manualStops(db); // trade id → user-entered stop (authoritative over inference)
   // Seed positions that predate our data window (reconciled against the current snapshot) so a
   // holding opened before coverage and sold inside it is built as coverage-incomplete rather than a
   // phantom opposite-direction trade with wrong P&L. See deriveSeeds.
@@ -172,7 +193,13 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
   for (const t of built) {
     const symbolOrders = allOrders.filter((o) => o.account === t.account && o.symbol === t.symbol);
     const stop = inferStops(t, symbolOrders);
-    const { risk, rMultiple } = computeRisk(t, stop.initialStop); // initial = planned risk (spec §6)
+    // Manual stop (if set) overrides inference for BOTH the planned-risk basis and the effective
+    // stop, so risk/R and the held_past_stop rule all read the user's explicit stop. TP is still
+    // inference-only (no manual TP field in v1).
+    const ms = manual.get(t.id);
+    const initialStop = ms ?? stop.initialStop; // initial = planned risk (spec §6)
+    const effectiveStop = ms ?? stop.effectiveStop;
+    const { risk, rMultiple } = computeRisk(t, initialStop);
 
     const resMs = resolutionMs(t);
     const from = t.openTime - PAD_MS;
@@ -199,7 +226,7 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
 
     const enriched: Trade = {
       ...t,
-      effectiveStop: stop.effectiveStop,
+      effectiveStop,
       effectiveTp: stop.effectiveTp,
       risk,
       rMultiple,
@@ -216,16 +243,26 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
   }
 
   replaceDerived(db, enrichedTrades, flagMap);
+}
 
+/**
+ * Full sync: pull raw from OpenD, then rebuild derived. Thin wrapper over pullRaw + rebuildDerived
+ * used by the CLI and the "Sync now" job. Reports DISTINCT stored counts (OpenD returns an account's
+ * rows across every market-header query, so a per-pull sum would double-count).
+ */
+export async function runSync(deps: SyncDeps): Promise<SyncResult> {
+  const { db, client, candles, config, now } = deps;
+  const { accounts } = await pullRaw(db, client, { now, historyDays: deps.historyDays });
+  await rebuildDerived(db, { candles, config, now });
+
+  const trades = allTrades(db);
   let flagCount = 0;
-  for (const f of flagMap.values()) flagCount += f.length;
-  // Report DISTINCT stored rows: OpenD returns an account's rows across every market-header query,
-  // so a per-pull sum would double-count. allFills/allOrders are deduped by primary key.
+  for (const t of trades) flagCount += flagsForTrade(db, t.id).length;
   return {
-    accounts: accounts.length,
-    fills: allFills.length,
-    orders: allOrders.length,
-    trades: enrichedTrades.length,
+    accounts,
+    fills: allRawFills(db).length,
+    orders: allRawOrders(db).length,
+    trades: trades.length,
     flags: flagCount,
   };
 }
