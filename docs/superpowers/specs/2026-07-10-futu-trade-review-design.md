@@ -301,4 +301,98 @@ Analogy: the binary is the *program*, the DB is the *save file*; updating the pr
 5. **Config-file location/format** for rule thresholds (since there's no settings UI in v1).
 
 **Resolved:** Release repo = **public** (zero token setup, free self-update; only code is public, never data).
+
+---
+
+## Spike Result (2026-07-10)
+
+**FINAL VERDICT (Round 3): ✅ PASS / GO — the all-Bun stack is confirmed. No fallback to Node or a Python sidecar is needed.**
+
+Round 3 (2026-07-10): with OpenD's `websocket_port` set to **33334** and a **user-chosen WebSocket Auth Key** typed into the GUI (not auto-generate), the spike authenticated and pulled real data over WebSocket — **and the `bun build --compile` binary behaved identically.** Confirmed:
+- `bun run src/futu/spike.ts` → `登录成功`, `Trd_GetAccList` `retType: 0` (real account `trdEnv: 1` + sim accounts), `Trd_GetHistoryOrderFillList` `retType: 0`.
+- `bun build src/futu/spike.ts --compile` → the standalone binary produced **identical** output (login + both queries `retType: 0`). This was the critical unknown; it passes.
+
+**Required OpenD config for the app to connect (for setup docs + Plan 4):**
+- Enable **`websocket_port`** (e.g. `33334`) — distinct from `api_port` (`33333`).
+- Set a **WebSocket Auth Key** to a **known value** (do NOT leave it auto-generate, or it isn't reproducible). Each user picks their own; the value lives in the app's local config in the user-data dir, **never** committed to the (public) repo.
+- SSL left off for localhost.
+- Client connects with `ftWebsocket.start(ip, wsPort, false, authKey)` (default import: `import ftWebsocket from "futu-api"`; SDK MD5-hashes the plaintext key internally).
+
+Earlier rounds below are kept for the debugging trail.
+
+**Prior verdict (Round 2): BLOCKED on the WebSocket auth key — resolved in Round 3 by setting a known key.** After enabling OpenD's `websocket_port` (33334), the WebSocket connected and completed its handshake, but OpenD **rejected the `InitConnect` with `retType: -1`** because a WebSocket auth key was being enforced (key field set to "auto-generate"). The generated key is displayed **only in the OpenD GUI's WebSocket settings** — not written to any readable config file, log, or keychain on disk (verified). Fixed by typing a known key and passing it via `OPEND_WS_KEY=<key>`.
+
+### Round 1 — what was tried (port 33333, the wrong port)
+
+- `bun add futu-api` → installed `futu-api@10.8.6808` cleanly (one blocked postinstall from `protobufjs`, which is just a benign version-scheme warning script — not required).
+- Read `node_modules/futu-api/{README.md,main.js,base.js,proto/*.proto}` directly (the README itself is a thin install-instructions page with no API docs). Confirmed via source:
+  - `futu-api` is a **WebSocket-only** client. `base.js` opens `new WebSocket(this.wsuri)` with `wsuri` built as `ws://ip:port` (or `wss://` if `ssl=true`). There is no raw-TCP/`net.Socket` code path anywhere in the package.
+  - `import ftWebsocket from "futu-api"` is the correct import — it's a **default** export, not named (the plan's sketch code, `import { ftWebsocket } from "futu-api"`, is wrong and throws `SyntaxError: Export named 'ftWebsocket' not found` under Bun; `main.js` only has `export const ftCmdID` and `export default ftWebsocket`).
+- Wrote `src/futu/spike.ts`, ran `OPEND_PORT=33333 bun run src/futu/spike.ts`.
+- Result: `ws.start(HOST, PORT, false)` → immediate `ErrorEvent`: `"WebSocket connection to 'ws://127.0.0.1:33333/' failed: Connection ended"`, followed by `CloseEvent` code `1006` (abnormal closure, no HTTP response at all). `onlogin(false, ...)` never even fires cleanly — the underlying `WebSocket` fails before the `InitConnect` handshake can be sent.
+- Verified independently with a raw `nc` HTTP Upgrade request to `127.0.0.1:33333` — OpenD returned **nothing** (connection closed with no bytes), confirming port 33333 does not speak HTTP/WebSocket at all.
+- Root cause found in OpenD's live config, `~/.com.futunn.FutuOpenD/UI/OpenD.xml`:
+  ```xml
+  <api_port>33333</api_port>
+  ...
+  <websocket_ip>127.0.0.1</websocket_ip>
+  ```
+  There is **no `<websocket_port>` entry**. Per OpenD's own shipped sample config (`FutuOpenD.xml`), `websocket_port` is commented out by default with the note *"WebSocket listening port. WebSocket will not work if not set."* Port 33333 is the **`api_port`** — the native protobuf-over-TCP port used by FUTU's C++/Python/Go/Java SDKs, a completely different protocol from the JS SDK's WebSocket transport. `lsof -p <OpenD PID>` confirms exactly one local listening port (33333); no separate WebSocket port is up anywhere.
+
+This is exactly the failure mode anticipated in the task brief's hypothesis: *"port 33333 speaks the native protobuf-over-TCP protocol, not WebSocket."* Confirmed precisely.
+
+### Real method names discovered (for when unblocked)
+
+Confirmed by reading `node_modules/futu-api/main.js` and the `.proto` files directly (not guessed):
+
+- Connect: `new ftWebsocket()`, then `ws.onlogin = (ok, msg) => {...}`, `ws.start(ip, port, ssl, key?)` — `key` (optional) is the plaintext WebSocket key; the SDK MD5-hashes it internally before sending, so pass the plaintext GUI key if one is ever configured.
+- List accounts: `ws.GetAccList({ c2s: { userID: 0 } })` → wraps cmd `Trd_GetAccList` (2001). Response shape: `{ retType, retMsg, errCode, s2c: { accList: TrdAcc[] } }`.
+- Historical fills: `ws.GetHistoryOrderFillList({ c2s: { header: { trdEnv, accID, trdMarket }, filterConditions: { beginTime, endTime } } })` → wraps cmd `Trd_GetHistoryOrderFillList` (2222). Response shape: `{ retType, retMsg, errCode, s2c: { header, orderFillList: OrderFill[] } }`. `beginTime`/`endTime` must be `"YYYY-MM-DD HH:MM:SS"` strings; required for historical queries.
+- (Also present, useful later: `Trd_GetOrderFillList` (today's fills only), `Trd_GetHistoryOrderList` (2221), `Trd_GetOrderList` (2201), `Trd_GetPositionList` (2102), `Trd_GetFunds` (2101), `Trd_UnlockTrade` (2005, NOT used in this spike per the read-only guardrail).)
+- Every call returns an already-decoded plain JS object (the SDK does the protobuf encode/decode internally) — callers never touch raw buffers directly.
+
+### Real field names discovered (from `.proto` source, for `futu-client` in Plan 4)
+
+`Trd_Common.TrdAcc` (account list rows):
+`trdEnv` (0=Simulate, 1=Real), `accID` (uint64), `trdMarketAuthList` (int[], see `TrdMarket` enum: 1=HK, 2=US, 3=CN, 4=HKCC, 5=Futures, 6=SG...), `accType`, `cardNum`, `securityFirm`, `simAccType`, `uniCardNum`, `accStatus`, `accRole`, `jpAccType`, `competitionAccName`.
+
+`Trd_Common.OrderFill` (historical fill rows — the `RawFill` source):
+`trdSide` (buy/sell enum), `fillID` (uint64, required), `fillIDEx` (string), `orderID` (uint64), `orderIDEx` (string), `code` (string, required), `name` (string, required), `qty` (double, required), `price` (double, required), `createTime` (string `"YYYY-MM-DD HH:MM:SS[.ms]"`, required — the fill timestamp), `counterBrokerID`, `counterBrokerName`, `secMarket`, `createTimestamp` (double, unix-ish), `updateTimestamp`, `status` (`OrderFillStatus` enum), `trdMarket`, `jpAccType`.
+
+`Trd_Common.TrdHeader` (required wrapper for all account-scoped trade calls): `trdEnv`, `accID`, `trdMarket`, `jpAccType`.
+
+`Trd_Common.TrdFilterConditions` (historical query filter): `codeList[]`, `idList[]` (uint64 — orderID for orders, fillID for fills), `beginTime`, `endTime`, `orderIDExList[]`, `filterMarket`.
+
+### Round 1 recommendation (superseded by Round 2 below)
+
+1. In the FUTU OpenD GUI, set a **WebSocket port** (e.g. `33334`, distinct from `api_port` 33333) under the WebSocket section, and restart OpenD. — **Done in Round 2.** (Note: the earlier claim here that "a WebSocket key is optional" turned out to be wrong when the GUI's key was set to auto-generate — see Round 2.)
+2. Re-run the spike against the new port — **Done in Round 2.**
+3. Fallback if WebSocket can't be used at all (spec §15): Node runtime, or a Python sidecar using FUTU's native TCP SDK against `api_port` 33333.
+
+---
+
+### Round 2 — WebSocket port live (33334); connects, but auth key required
+
+**Setup at this point:** OpenD's live config (`~/.com.futunn.FutuOpenD/UI/OpenD.xml`) now has `<websocket_port>33334</websocket_port>` alongside `<api_port>33333</api_port>`; SSL off; the GUI's "WebSocket Auth Key" field was left blank / "auto-generate". `lsof` confirms a separate `FTWebSocket` process listening on `127.0.0.1:33334`.
+
+**What happened:**
+- Pointed the spike at `33334` (its new default; `OPEND_PORT` override still honored) and ran `bun run src/futu/spike.ts`.
+- The WebSocket handshake now **succeeds** — big change from Round 1. OpenD's `FTWebSocket_*.log` shows `Established` → `Recv, ProtoID:1` (our `InitConnect`) → `Closed`. So the transport works; OpenD received our init packet.
+- OpenD then **rejects `InitConnect`**: the decoded `InitWebSocket.Response` is `{ retType: -1 }` with **no `s2c`** (so no `connID`) and no `retMsg`. The SDK surfaces this as a login failure (`onlogin(false)`); the spike prints `SPIKE FAILED: OpenD login failed`.
+- `retType: -1` immediately after a clean handshake, with the auth-key field set to auto-generate, is the auth-key-required signature. OpenD generated a key at startup and enforces it on `InitConnect`.
+
+**Where the auto-generated key lives (matters for the brother's setup docs):**
+- It is **displayed only in the OpenD GUI** (the "WebSocket Auth Key" field in settings after auto-generation). Copy it from there.
+- It is **NOT recoverable from disk.** Checked and came up empty: `OpenD.xml` (no `websocket_key_md5` element), the transient generated `WebSocket_<pid>.xml` (consumed and deleted at child-process spawn), all `~/.com.futunn.FutuOpenD/Log/*` (main `FutuOpenD_*.ftlog` is encrypted; the GTW log prints the WS port + "SSL Enabled: No" but not the key), the `F3CNN/*.dat` config blobs, the GUI plist (`cn.futu.FutuOpenDGUI.plist` is empty), and the macOS keychain. GUI UI-scripting to read the field is blocked (Accessibility permission not granted — not something this spike should change).
+- **Setup-doc takeaway:** for a reproducible install, either (a) tell the user to **type a known key** into OpenD's WebSocket Auth Key field (don't auto-generate) and record it in the app config, or (b) **leave the key blank entirely** — TBD whether OpenD permits a truly keyless WebSocket; the auto-generate path definitely enforces one.
+
+**How to pass the key (already wired in the spike):**
+```bash
+OPEND_WS_KEY='<key-from-OpenD-GUI>' OPEND_PORT=33334 bun run src/futu/spike.ts
+```
+The spike reads `OPEND_WS_KEY` and passes it as the 4th arg to `ftWebsocket.start(ip, port, /*ssl*/ false, key)`. The SDK MD5-hashes the plaintext key internally before sending, so pass the **plaintext** key exactly as shown in the GUI (do not pre-hash it).
+
+**Still pending (blocked on the key):** the authenticated `bun run` (GetAccList + GetHistoryOrderFillList), and then the **critical `bun build --compile` check**. Both are one step away — provide the key and re-run.
+
+**Confidence:** the connection path is proven end-to-end up to auth; this is a single-value credential gap, not a stack/runtime problem. GO remains likely once the key is supplied.
 ```
