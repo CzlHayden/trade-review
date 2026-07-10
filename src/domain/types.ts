@@ -44,4 +44,50 @@ export interface Trade {
   holdSeconds: number | null;
   coverageOk: boolean; // false when the trade began before our data coverage (seeded)
   fillIds: string[];
+  // Enrichment fields — null from trade-builder; populated by the sync pipeline (Plan 2+ modules).
+  effectiveStop: number | null;
+  effectiveTp: number | null;
+  risk: number | null;
+  rMultiple: number | null;
+  mae: number | null;
+  mfe: number | null;
+}
+
+/** FUTU order type (normalized). Stop/stop-limit/trailing are protective-stop candidates. */
+export type OrderType =
+  | "MARKET"
+  | "LIMIT"
+  | "STOP"
+  | "STOP_LIMIT"
+  | "TRAILING_STOP"
+  | "OTHER";
+
+/** An order as returned by FUTU (including cancelled ones). Used to infer protective stops. */
+export interface RawOrder {
+  id: string;
+  symbol: string;
+  side: Side;
+  type: OrderType;
+  qty: number;
+  price: number | null; // limit price; null for market/stop-market
+  triggerPrice: number | null; // stop trigger; null for non-stop orders
+  status: string; // raw FUTU status string (e.g. "FILLED_ALL", "CANCELLED_ALL")
+  createTime: number; // epoch ms
+  account: string;
+}
+
+/** An OHLC candle. Used for MAE/MFE and (later) charts. */
+export interface Candle {
+  time: number; // epoch ms, bar start
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+/** Output of stop inference for one trade. */
+export interface StopInfo {
+  effectiveStop: number | null;
+  effectiveTp: number | null;
 }

@@ -127,6 +127,12 @@ function finalize(acc: Acc): Trade {
     holdSeconds: closed ? Math.round((acc.lastTime - acc.openTime) / 1000) : null,
     coverageOk: acc.coverageOk,
     fillIds: acc.fillIds,
+    effectiveStop: null,
+    effectiveTp: null,
+    risk: null,
+    rMultiple: null,
+    mae: null,
+    mfe: null,
   };
 }
 
