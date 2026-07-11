@@ -6,7 +6,7 @@
 // Trd_GetOrderFee. Orders/positions do carry a currency enum; fills derive currency from market.
 
 import type { Account } from "../domain/ports";
-import type { OrderType, RawFill, RawOrder, RawPosition, Side } from "../domain/types";
+import type { AccountFunds, OrderType, RawFill, RawOrder, RawPosition, Side } from "../domain/types";
 
 /** TrdEnv_Real (Trd_Common.proto). */
 export const TRD_ENV_REAL = 1;
@@ -52,6 +52,15 @@ export function currencyForMarket(market: number): string {
 
 export function currencyForEnum(cur: number | undefined): string {
   return (cur !== undefined && ENUM_CURRENCY[cur]) || "UNKNOWN";
+}
+
+const CURRENCY_ENUM: Record<string, number> = Object.fromEntries(
+  Object.entries(ENUM_CURRENCY).map(([k, v]) => [v, Number(k)]),
+);
+
+/** Currency code → Trd_Common.Currency enum (0 = Unknown). Used to request GetFunds in a currency. */
+export function currencyEnumFor(code: string): number {
+  return CURRENCY_ENUM[code] ?? 0;
 }
 
 // ---- time ---------------------------------------------------------------------
@@ -194,6 +203,19 @@ export function mapPosition(raw: any, account: string, snapshotMs: number, marke
     qty: raw.positionSide === 1 ? -qtyAbs : qtyAbs, // PositionSide: 1 = Short
     avgCost,
     currency: currencyForEnum(raw.currency) !== "UNKNOWN" ? currencyForEnum(raw.currency) : currencyForMarket(mkt),
+    time: snapshotMs,
+  };
+}
+
+/** Trd_Common.Funds → AccountFunds. `currency` is the denomination we requested (the response echoes
+ * it in `funds.currency`, but we key the row on what we asked for). `time` is stamped by the caller. */
+export function mapFunds(raw: any, account: string, currency: string, snapshotMs: number): AccountFunds {
+  return {
+    account,
+    currency,
+    totalAssets: raw.totalAssets ?? 0,
+    cash: raw.cash ?? 0,
+    marketVal: raw.marketVal ?? 0,
     time: snapshotMs,
   };
 }

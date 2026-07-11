@@ -4,11 +4,32 @@ import {
   mapOrder,
   mapPosition,
   mapAccount,
+  mapFunds,
   currencyForMarket,
+  currencyEnumFor,
   futuSymbol,
   marketName,
   isCancelledFill,
 } from "../../src/futu/map";
+
+test("currencyEnumFor is the inverse of the currency enum (0 for unknown)", () => {
+  expect(currencyEnumFor("HKD")).toBe(1);
+  expect(currencyEnumFor("USD")).toBe(2);
+  expect(currencyEnumFor("SGD")).toBe(5);
+  expect(currencyEnumFor("BTC")).toBe(0); // unknown → Currency_Unknown
+});
+
+test("mapFunds pulls net assets and stamps the requested currency", () => {
+  const f = mapFunds({ totalAssets: 12_345.67, cash: 5_000, marketVal: 7_345.67 }, "acc1", "USD", 999);
+  expect(f).toEqual({
+    account: "acc1",
+    currency: "USD",
+    totalAssets: 12_345.67,
+    cash: 5_000,
+    marketVal: 7_345.67,
+    time: 999,
+  });
+});
 
 test("futuSymbol / currencyForMarket / marketName normalize by market", () => {
   expect(futuSymbol("AAPL", 2)).toBe("US.AAPL");

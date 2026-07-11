@@ -14,6 +14,7 @@ import {
   snapshotClock,
 } from "../store/repos";
 import { distinctSetups, distinctTags, getJournal } from "../store/journal";
+import { equityAsOf, latestEquityByCurrency } from "../store/funds";
 import pkg from "../../package.json";
 
 export interface OpenPosition {
@@ -64,6 +65,15 @@ export interface TradeDetail {
   flags: Flag[];
   stop: StopInfo; // inferred provenance (the stored trade already reflects any manual override)
   journal: Journal | null;
+  // Planned risk as a fraction of account equity, same currency. `equityBasis` says which equity:
+  //  - "at_open": a snapshot preceded the trade open — precise (the norm for trades opened after a
+  //    prior sync captured funds);
+  //  - "latest": no snapshot preceded the open, so we approximate with the newest equity snapshot
+  //    (OpenD has no historical-funds query — this is the honest fallback for older trades);
+  //  - "none": no equity snapshot at all → riskPct null.
+  riskPct: number | null;
+  accountEquity: number | null; // equity used as the denominator, in the trade's currency
+  equityBasis: "at_open" | "latest" | "none";
 }
 
 export function tradeDetail(db: Database, id: string): TradeDetail | null {
@@ -74,6 +84,12 @@ export function tradeDetail(db: Database, id: string): TradeDetail | null {
   const orders = allRawOrders(db).filter(
     (o) => o.account === trade.account && o.symbol === trade.symbol,
   );
+  const atOpen = equityAsOf(db, trade.account, trade.currency, trade.openTime);
+  const latest = atOpen === null ? latestEquityByCurrency(db, trade.account).get(trade.currency) ?? null : null;
+  const equity = atOpen ?? latest;
+  const equityBasis = atOpen !== null ? "at_open" : latest !== null ? "latest" : "none";
+  const riskPct =
+    trade.risk !== null && equity !== null && equity > 0 ? trade.risk / equity : null;
   return {
     trade,
     fills,
@@ -81,7 +97,48 @@ export function tradeDetail(db: Database, id: string): TradeDetail | null {
     flags: flagsForTrade(db, id),
     stop: inferStops(trade, orders),
     journal: getJournal(db, id),
+    riskPct,
+    accountEquity: equity,
+    equityBasis,
   };
+}
+
+/** Open positions grouped per currency, with each currency's total open risk vs latest account
+ * equity. Equity/risk are compared within a single currency only (never summed across). */
+export interface CurrencyPositions {
+  currency: string;
+  positions: OpenPosition[];
+  totalOpenRisk: number | null; // sum of openRisk over rows that have one (null when none do)
+  equity: number | null; // latest equity snapshot in this currency
+  riskPct: number | null; // totalOpenRisk / equity
+}
+
+export function openPositionsByCurrency(db: Database, snapshotTime: number): { byCurrency: CurrencyPositions[] } {
+  const positions = openPositions(db, snapshotTime);
+  const equityByCcy = new Map<string, Map<string, number>>(); // account → (currency → equity)
+  const groups = new Map<string, OpenPosition[]>();
+  for (const p of positions) {
+    const arr = groups.get(p.currency) ?? [];
+    arr.push(p);
+    groups.set(p.currency, arr);
+    if (!equityByCcy.has(p.account)) equityByCcy.set(p.account, latestEquityByCurrency(db, p.account));
+  }
+  const byCurrency = [...groups.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([currency, ps]) => {
+      const risks = ps.map((p) => p.openRisk).filter((r): r is number => r !== null);
+      const totalOpenRisk = risks.length ? risks.reduce((a, b) => a + b, 0) : null;
+      // Sum equity for this currency across the DISTINCT accounts holding it (each account's own
+      // snapshot counted once, even if it has several positions in this currency).
+      let equity: number | null = null;
+      for (const account of new Set(ps.map((p) => p.account))) {
+        const e = equityByCcy.get(account)?.get(currency);
+        if (e !== undefined) equity = (equity ?? 0) + e;
+      }
+      const riskPct = totalOpenRisk !== null && equity !== null && equity > 0 ? totalOpenRisk / equity : null;
+      return { currency, positions: ps, totalOpenRisk, equity, riskPct };
+    });
+  return { byCurrency };
 }
 
 export interface Meta {

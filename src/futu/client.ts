@@ -7,8 +7,8 @@
 // MD5-hashes the plaintext auth key internally, so pass the plaintext key as the 4th start() arg.
 import ftWebsocket from "futu-api";
 import type { Account, FutuClient } from "../domain/ports";
-import type { RawFill, RawOrder, RawPosition } from "../domain/types";
-import { isCancelledFill, mapAccount, mapFill, mapOrder, mapPosition, TRD_ENV_REAL } from "./map";
+import type { AccountFunds, RawFill, RawOrder, RawPosition } from "../domain/types";
+import { currencyForEnum, isCancelledFill, mapAccount, mapFill, mapFunds, mapOrder, mapPosition, TRD_ENV_REAL } from "./map";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -121,6 +121,18 @@ export async function connectFutu(opts: ConnectOpts = {}): Promise<FutuClient> {
       // sync overrides `time` with its snapshot clock; 0 here is a placeholder.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return (resp?.s2c?.positionList ?? []).map((p: any) => mapPosition(p, account.id, 0, market));
+    },
+
+    async getFunds(account, market, currency): Promise<AccountFunds | null> {
+      await sleep(paceMs);
+      // `currency` is REQUIRED for comprehensive securities accounts (else OpenD errors); it also
+      // tells OpenD which denomination to convert net assets into, so WE never do FX.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const resp: any = await ws.GetFunds({ c2s: { header: header(account, market), currency } });
+      const funds = resp?.s2c?.funds;
+      if (!funds) return null;
+      // sync overrides `time` with its snapshot clock; 0 here is a placeholder.
+      return mapFunds(funds, account.id, currencyForEnum(currency), 0);
     },
 
     close() {

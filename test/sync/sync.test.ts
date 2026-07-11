@@ -6,6 +6,7 @@ import { DEFAULT_RULE_CONFIG, type Candle } from "../../src/domain/types";
 import type { Account, CandleSource, FutuClient } from "../../src/domain/ports";
 import { allTrades, flagsForTrade, positionsAt } from "../../src/store/repos";
 import { getSyncState } from "../../src/store/sync-state";
+import { tradeDetail } from "../../src/api/views";
 
 const ACC: Account = { id: "acc1", trdEnv: 1, markets: [2] };
 
@@ -15,6 +16,7 @@ function stubClient(over: Partial<FutuClient> = {}): FutuClient {
     getHistoryFills: async () => [],
     getHistoryOrders: async () => [],
     getPositions: async () => [],
+    getFunds: async () => null,
     close: () => {},
     ...over,
   };
@@ -62,6 +64,50 @@ test("runSync enriches stop/risk from orders and MAE/MFE from candles", async ()
   expect(t.rMultiple).toBeCloseTo(1, 5); // pnl 100 / risk 100
   expect(t.mae).toBe(2);
   expect(t.mfe).toBe(3);
+});
+
+test("runSync snapshots account equity per currency and surfaces trade risk %", async () => {
+  const db = openTestDb();
+  const fundsCalls: Array<{ currency: number }> = [];
+  const client = stubClient({
+    getHistoryFills: async () => [
+      { id: "f1", orderId: "o1", symbol: "US.AAPL", side: "BUY", qty: 100, price: 10, fee: 0, currency: "USD", time: 1000, account: "acc1" },
+      { id: "f2", orderId: "o2", symbol: "US.AAPL", side: "SELL", qty: 100, price: 11, fee: 0, currency: "USD", time: 5000, account: "acc1" },
+    ],
+    getHistoryOrders: async () => [
+      { id: "s1", symbol: "US.AAPL", side: "SELL", type: "STOP", qty: 100, price: null, triggerPrice: 9, status: "SUBMITTED", createTime: 1500, updateTime: null, account: "acc1" },
+    ],
+    getFunds: async (_acc, _mkt, currency) => {
+      fundsCalls.push({ currency });
+      return { account: "acc1", currency: "USD", totalAssets: 10_000, cash: 0, marketVal: 0, time: 0 };
+    },
+  });
+  await runSync({ db, client, candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 10_000 });
+  expect(fundsCalls).toEqual([{ currency: 2 }]); // US market → USD enum 2, requested once
+  const row = db.query(`SELECT account, currency, total_assets, time FROM account_funds`).get() as any;
+  expect(row).toEqual({ account: "acc1", currency: "USD", total_assets: 10_000, time: 10_000 }); // stamped snapshot clock
+  const t = allTrades(db)[0]!;
+  const det = tradeDetail(db, t.id)!;
+  // Trade opened (t=1000) before this sync's equity snapshot (t=10_000), so no at-open equity —
+  // falls back to the latest snapshot, flagged approximate.
+  expect(det.equityBasis).toBe("latest");
+  expect(det.riskPct).toBeCloseTo(100 / 10_000); // risk 100 / equity 10k = 1%
+});
+
+test("runSync tolerates a getFunds failure without aborting the sync", async () => {
+  const db = openTestDb();
+  const client = stubClient({
+    getHistoryFills: async () => [
+      { id: "f1", orderId: "o1", symbol: "US.AAPL", side: "BUY", qty: 100, price: 10, fee: 0, currency: "USD", time: 1000, account: "acc1" },
+      { id: "f2", orderId: "o2", symbol: "US.AAPL", side: "SELL", qty: 100, price: 11, fee: 0, currency: "USD", time: 5000, account: "acc1" },
+    ],
+    getFunds: async () => {
+      throw new Error("OpenD funds unavailable");
+    },
+  });
+  const res = await runSync({ db, client, candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 10_000 });
+  expect(res.trades).toBe(1); // sync completed
+  expect(db.query(`SELECT COUNT(*) c FROM account_funds`).get()).toEqual({ c: 0 }); // no equity, risk-% absent
 });
 
 test("runSync fires a mistake flag through the full pipeline", async () => {
@@ -128,6 +174,7 @@ test("runSync skips simulate accounts (only trdEnv real is queried)", async () =
     },
     getHistoryOrders: async () => [],
     getPositions: async () => [],
+    getFunds: async () => null,
     close: () => {},
   };
   const res = await runSync({ db, client, candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 10_000 });
