@@ -4,14 +4,12 @@ import { Layout } from "./components/Layout";
 import { Dashboard } from "./screens/Dashboard";
 import { Trades } from "./screens/Trades";
 import { TradeDetail } from "./screens/TradeDetail";
+import { Positions } from "./screens/Positions";
+import { WeeklyJournal } from "./screens/WeeklyJournal";
 
 const qc = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false, retry: 1 } },
 });
-
-function Soon({ what }: { what: string }) {
-  return <div className="empty card">{what} lands in the next iteration.</div>;
-}
 
 export function App() {
   return (
@@ -36,12 +34,12 @@ export function App() {
         </Route>
         <Route path="/positions">
           <Layout title="Open positions">
-            <Soon what="Open positions" />
+            <Positions />
           </Layout>
         </Route>
         <Route path="/journal">
           <Layout title="Weekly journal">
-            <Soon what="The weekly journal" />
+            <WeeklyJournal />
           </Layout>
         </Route>
         <Route>

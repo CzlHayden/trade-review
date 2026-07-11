@@ -10,9 +10,9 @@ import type {
   StopInfo,
   Trade,
 } from "../../src/domain/types";
-import type { Journal, WeeklyEntry } from "../../src/domain/journal-types";
+import type { Journal, WeeklyEntry, WatchlistItem } from "../../src/domain/journal-types";
 
-export type { Breakdown, Candle, Flag, Stats, Trade, StopInfo, RawFill, RawOrder, Journal, WeeklyEntry };
+export type { Breakdown, Candle, Flag, Stats, Trade, StopInfo, RawFill, RawOrder, Journal, WeeklyEntry, WatchlistItem };
 
 /** A trade row from GET /api/trades — base Trade plus embedded journal/flags for the list. */
 export interface TradeRow extends Trade {

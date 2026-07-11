@@ -1,16 +1,23 @@
-import { useTradeDetail } from "../lib/hooks";
+import type { ReactNode } from "react";
+import { useTradeDetail, useCandles, useMeta, useTheme } from "../lib/hooks";
 import { money, price, rMultiple, signClass, date, dateTime, holdTime, qty } from "../lib/format";
 import { FlagChips } from "../components/FlagChips";
+import { TradeChart } from "../components/TradeChart";
+import { JournalEditor } from "../components/JournalEditor";
 
-/** Compact read-only trade detail. The marked-up candlestick chart + journal editor land in the
- * next iteration; this already shows the reconstructed trade, its fills, flags, and inferred stop. */
 export function TradeDetail({ id }: { id: string }) {
   const { data, isLoading } = useTradeDetail(id);
-  if (isLoading) return <div className="spinner">Loading…</div>;
-  if (!data) return <div className="empty card">Trade not found.</div>;
-  const { trade: t, fills, flags, stop, journal } = data;
+  const [mode] = useTheme();
+  const meta = useMeta();
+  const t = data?.trade;
+  const res: "day" | "hour" = t && t.holdSeconds !== null && t.holdSeconds < 2 * 86400 ? "hour" : "day";
+  const candles = useCandles(id, res);
 
-  const stat = (label: string, value: React.ReactNode, cls = "") => (
+  if (isLoading) return <div className="spinner">Loading…</div>;
+  if (!data || !t) return <div className="empty card">Trade not found.</div>;
+  const { fills, flags, stop, journal } = data;
+
+  const stat = (label: string, value: ReactNode, cls = "") => (
     <div className="card kpi">
       <div className="kpi-label">{label}</div>
       <div className={`kpi-value num ${cls}`} style={{ fontSize: 16 }}>
@@ -21,7 +28,7 @@ export function TradeDetail({ id }: { id: string }) {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 4 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 12 }}>
         <span className="mono" style={{ fontSize: 18, fontWeight: 650 }}>
           {t.symbol}
         </span>
@@ -34,40 +41,69 @@ export function TradeDetail({ id }: { id: string }) {
         {!t.coverageOk && <span className="ccy-badge">partial coverage</span>}
       </div>
 
+      <TradeChart
+        candles={candles.data ?? []}
+        fills={fills}
+        marks={{ avgEntry: t.avgEntry, effectiveStop: t.effectiveStop, effectiveTp: t.effectiveTp, direction: t.direction }}
+        themeKey={mode}
+      />
+
       <div className="kpi-row" style={{ marginTop: 12 }}>
         {stat("Realized P&L", t.realizedPnl !== null ? money(t.realizedPnl, t.currency) : "—", signClass(t.realizedPnl))}
         {stat("R-multiple", rMultiple(t.rMultiple), signClass(t.rMultiple))}
         {stat("Risk", t.risk !== null ? price(t.risk, t.currency) : "—")}
         {stat("Avg entry / exit", `${price(t.avgEntry, t.currency)} / ${t.avgExit !== null ? price(t.avgExit, t.currency) : "—"}`)}
         {stat("Max size", qty(t.maxQty))}
-        {stat("MAE / MFE", `${t.mae !== null ? money(t.mae, t.currency) : "—"} / ${t.mfe !== null ? money(t.mfe, t.currency) : "—"}`)}
-      </div>
-
-      <div className="section-title">Flags</div>
-      <div className="card" style={{ padding: 12 }}>
-        {flags.length === 0 ? <span className="muted">No mistake flags — clean mechanics.</span> : <FlagChips flags={flags} />}
-        {flags.length > 0 && (
-          <ul className="muted" style={{ margin: "10px 0 0", paddingLeft: 18, lineHeight: 1.7 }}>
-            {flags.map((f) => (
-              <li key={f.ruleId}>{f.reason}</li>
-            ))}
-          </ul>
+        {stat(
+          "MAE / MFE",
+          `${t.mae !== null ? money(t.mae, t.currency) : "—"} / ${t.mfe !== null ? money(t.mfe, t.currency) : "—"}`,
         )}
       </div>
 
-      <div className="section-title">Inferred stop</div>
-      <div className="card" style={{ padding: 12 }}>
-        {stop.receipt ? (
-          <span className="mono">{stop.receipt}</span>
-        ) : (
-          <span className="muted">No protective stop found in orders{journal?.manualStop != null ? "" : " — add a manual stop in the journal (coming next)."}</span>
-        )}
-        {journal?.manualStop != null && (
-          <div style={{ marginTop: 6 }}>
-            Manual stop: <span className="mono">{price(journal.manualStop, t.currency)}</span>{" "}
-            <span className="faint">(overrides inference)</span>
+      <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1.3fr) minmax(0, 1fr)", marginTop: 18, alignItems: "start" }}>
+        <div>
+          <div className="section-title" style={{ marginTop: 0 }}>
+            Journal
           </div>
-        )}
+          <JournalEditor key={id} tradeId={id} journal={journal} setups={meta.data?.setups ?? []} currency={t.currency} />
+        </div>
+
+        <div>
+          <div className="section-title" style={{ marginTop: 0 }}>
+            Flags
+          </div>
+          <div className="card" style={{ padding: 12 }}>
+            {flags.length === 0 ? (
+              <span className="muted">No mistake flags — clean mechanics.</span>
+            ) : (
+              <>
+                <FlagChips flags={flags} />
+                <ul className="muted" style={{ margin: "10px 0 0", paddingLeft: 18, lineHeight: 1.7 }}>
+                  {flags.map((f) => (
+                    <li key={f.ruleId}>{f.reason}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+
+          <div className="section-title">Inferred stop</div>
+          <div className="card" style={{ padding: 12 }}>
+            {stop.receipt ? (
+              <span className="mono" style={{ fontSize: 12 }}>
+                {stop.receipt}
+              </span>
+            ) : (
+              <span className="muted">No protective stop found in orders.</span>
+            )}
+            {journal?.manualStop != null && (
+              <div style={{ marginTop: 8 }}>
+                Manual stop <span className="mono">{price(journal.manualStop, t.currency)}</span>{" "}
+                <span className="faint">overrides inference</span>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="section-title">Fills ({fills.length})</div>

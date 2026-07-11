@@ -11,6 +11,24 @@ export const useBreakdowns = (by: string) =>
 export const useTradeDetail = (id: string) =>
   useQuery({ queryKey: ["trade", id], queryFn: () => api.trade(id), enabled: !!id });
 
+export const useCandles = (id: string, res: "day" | "hour") =>
+  useQuery({ queryKey: ["candles", id, res], queryFn: () => api.candles(id, res), enabled: !!id });
+
+/** Save a trade's journal. A manual-stop/setup/tags change re-derives on the server, so invalidate
+ * everything that depends on derived data (this trade + all list/stat/breakdown queries). */
+export function usePutJournal(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => api.putJournal(id, body),
+    onSuccess: (detail) => {
+      qc.setQueryData(["trade", id], detail);
+      for (const key of ["trades", "stats", "breakdowns", "meta"]) {
+        qc.invalidateQueries({ queryKey: [key] });
+      }
+    },
+  });
+}
+
 /** Poll sync status only while a sync is running; when it flips to done, invalidate everything so
  * the whole app refetches the freshly-synced data (one place, not a manual refetch cascade). */
 export function useSyncStatus() {
@@ -32,6 +50,17 @@ export function useSyncStatus() {
     setWasRunning(running);
   }, [q.data?.running, wasRunning, qc]);
   return q;
+}
+
+export const useWeek = (isoWeek: string) =>
+  useQuery({ queryKey: ["week", isoWeek], queryFn: () => api.week(isoWeek), enabled: !!isoWeek });
+
+export function usePutWeek(isoWeek: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => api.putWeek(isoWeek, body),
+    onSuccess: (view) => qc.setQueryData(["week", isoWeek], view),
+  });
 }
 
 export function useStartSync() {
