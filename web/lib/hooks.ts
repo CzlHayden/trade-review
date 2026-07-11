@@ -22,13 +22,15 @@ export const useCandles = (id: string, res: "1d" | "1h" | "15m" = "1d") =>
 export const useDrawings = (id: string) =>
   useQuery({ queryKey: ["drawings", id], queryFn: () => api.drawings(id), enabled: !!id });
 
-/** Save a trade's chart drawings. Not derived data, so this only invalidates the trade's own
- * drawings query — no cascade to trades/stats/breakdowns/positions. */
+/** Save a trade's chart drawings. Not derived data, so no cascade to trades/stats/breakdowns.
+ * Write the saved set straight into the cache (setQueryData) rather than invalidating: a refetch
+ * would land the server snapshot AFTER the user may have drawn more, and rehydrating from it could
+ * drop that newer annotation. This also keeps the cache correct for a quick remount within staleTime. */
 export function usePutDrawings(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (drawings: Drawing[]) => api.putDrawings(id, drawings),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["drawings", id] }),
+    onSuccess: (data) => qc.setQueryData(["drawings", id], data),
   });
 }
 

@@ -62,12 +62,14 @@ function toKline(c: Candle): KLineData {
 const MARKS = "marks"; // our locked trade marks
 const USER = "user"; // user drawings (persisted)
 
-// klinecharts v10 built-in OVERLAYS only (its `rect` is a figure, not an overlay — createOverlay
-// would no-op). Segment/horizontalStraightLine/fibonacciLine are real overlay templates.
+// klinecharts v10 built-in OVERLAYS only (its `rect` is a FIGURE, not an overlay — createOverlay
+// would no-op). segment/horizontalStraightLine/fibonacciLine/brush are real overlay templates
+// (`brush` is a continuous freehand overlay: totalStep 2, drawingMode 'continuous').
 const TOOLS: Array<{ name: string; label: string }> = [
   { name: "segment", label: "Line" },
   { name: "horizontalStraightLine", label: "H-line" },
   { name: "fibonacciLine", label: "Fib" },
+  { name: "brush", label: "Brush" },
 ];
 
 /** Marked-up candlestick chart on klinecharts: candles + volume, fill markers, entry/stop/TP lines,
@@ -109,6 +111,7 @@ export function TradeChart({
   const chart = useRef<Chart | null>(null);
   const bars = useRef<KLineData[]>([]);
   const hydrating = useRef(false); // suppress persistence while we recreate saved overlays
+  const hydrated = useRef(false); // hydrate saved drawings ONCE per mount (keyed by trade → per trade)
   const lastView = useRef<{ symbol: string; res: Res } | null>(null); // only re-fit on symbol/res change
   const onChange = useRef(onDrawingsChange);
   onChange.current = onDrawingsChange;
@@ -186,6 +189,7 @@ export function TradeChart({
     const drawings: Drawing[] = c.getOverlays({ groupId: USER }).map((o) => ({
       name: o.name,
       points: (o.points ?? []).map((p) => ({ timestamp: p.timestamp, value: p.value })),
+      ...(o.extendData !== undefined ? { extendData: o.extendData } : {}), // labels/metadata round-trip
     }));
     onChange.current(drawings);
   };
@@ -239,14 +243,16 @@ export function TradeChart({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [marks, fills, themeKey, candles.length]);
 
-  // Recreate saved user drawings on load / trade change (replace-not-accumulate). Each in its own
-  // try/catch so one bad row can't poison the chart; `hydrating` blocks the load→save echo.
-  // Keyed on savedDrawings ONLY — not candle changes: overlays survive setPeriod/resetData (they live
-  // in a separate store and reposition by timestamp), so re-hydrating on a res switch would needlessly
-  // tear down and rebuild — and would wipe any drawing made during the pending debounce window.
+  // Recreate saved user drawings ONCE, when the drawings query first succeeds (gated on drawingsReady
+  // so we never hydrate the pre-load placeholder). Each in its own try/catch so one bad row can't
+  // poison the chart; `hydrating` blocks the load→save echo. NOT re-run on later savedDrawings changes:
+  // after mount the chart is the source of truth, and every successful save updates the cache — a
+  // re-hydrate would tear down the USER group and could wipe a drawing made during the debounce window.
+  // (Trade change remounts this component via the id key, resetting `hydrated` for the next trade.)
   useEffect(() => {
     const c = chart.current;
-    if (!c) return;
+    if (!c || hydrated.current || !drawingsReady) return;
+    hydrated.current = true;
     hydrating.current = true;
     c.removeOverlay({ groupId: USER });
     for (const d of savedDrawings) {
@@ -255,6 +261,7 @@ export function TradeChart({
           name: d.name,
           groupId: USER,
           points: d.points,
+          extendData: d.extendData,
           onDrawEnd: () => persist(),
           onPressedMoveEnd: () => persist(),
           onRemoved: () => persist(),
@@ -265,7 +272,7 @@ export function TradeChart({
     }
     hydrating.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savedDrawings]);
+  }, [savedDrawings, drawingsReady]);
 
   const toggle = (r: Res) => (
     <button
