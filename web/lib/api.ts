@@ -33,6 +33,8 @@ export interface TradeDetail {
   riskPct: number | null;
   accountEquity: number | null;
   equityBasis: "at_open" | "latest" | "none";
+  currentQty: number; // signed current holding from the latest snapshot (0 when flat/closed)
+  positionAsOf: number; // that snapshot's clock (how fresh the holding/stop are)
 }
 
 export interface OpenPosition {

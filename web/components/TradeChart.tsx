@@ -424,7 +424,10 @@ export function TradeChart({
           </span>
         )}
       </div>
-      <div className="card" style={{ position: "relative", width: "100%", height: 380 }}>
+      {/* Big, tall chart — the primary surface for reviewing a trade. Responsive to viewport height
+          (klinecharts observes the container and re-lays out), clamped so it stays usable on small and
+          huge screens alike. */}
+      <div className="card" style={{ position: "relative", width: "100%", height: "clamp(460px, 70vh, 860px)" }}>
         <div ref={el} style={{ width: "100%", height: "100%" }} />
         {candles.length === 0 && (
           <div

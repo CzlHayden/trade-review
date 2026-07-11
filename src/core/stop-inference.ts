@@ -11,6 +11,17 @@ function isDead(status: string): boolean {
   return DEAD_STATUS.some((d) => s.includes(d));
 }
 
+/** Substrings meaning a once-resting order is no longer working: the user cancelled it (CANCELLING_*,
+ * CANCELLED_*, FILL_CANCELLED) or it fully executed (FILLED_ALL). A FILLED_PART stop still rests for
+ * its remainder, so it stays "working". Used only to pick the currently-live stop, never the post-hoc
+ * effective one. */
+const GONE_STATUS = ["CANCEL", "FILLED_ALL"];
+
+function isGone(status: string): boolean {
+  const s = status.toUpperCase();
+  return GONE_STATUS.some((g) => s.includes(g));
+}
+
 /** The side of an order that would REDUCE this trade's position. */
 function closingSide(trade: Trade): "BUY" | "SELL" {
   return trade.direction === "LONG" ? "SELL" : "BUY";
@@ -59,6 +70,9 @@ export function inferStops(trade: Trade, orders: RawOrder[]): StopInfo {
   const initial = stops[0] ?? null;
   const effective = stops[stops.length - 1] ?? null;
   const tp = tps[tps.length - 1] ?? null;
+  // The latest stop that hasn't been cancelled or fully filled — the one actually protecting right now.
+  const liveStops = stops.filter((o) => !isGone(o.status));
+  const live = liveStops[liveStops.length - 1] ?? null;
 
   return {
     initialStop: initial?.triggerPrice ?? null,
@@ -69,5 +83,7 @@ export function inferStops(trade: Trade, orders: RawOrder[]): StopInfo {
     receipt: effective
       ? `${effective.side} ${effective.type} ${effective.qty} @ ${effective.triggerPrice} (order ${effective.id})`
       : null,
+    liveStop: live?.triggerPrice ?? null,
+    liveStopQty: live?.qty ?? null,
   };
 }
