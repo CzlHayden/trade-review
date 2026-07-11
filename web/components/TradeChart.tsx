@@ -189,14 +189,19 @@ export function TradeChart({
     onChange.current(drawings);
   };
 
+  // Overlay lifecycle → persist. onDrawEnd/onPressedMoveEnd fire with the overlay already in
+  // getOverlays(), so persist synchronously. onRemoved, however, fires BEFORE klinecharts splices the
+  // overlay out of the store (verified in the lib), so a synchronous persist would re-serialize the
+  // just-removed drawing and it would reappear on the next save/remount — defer it a microtask so the
+  // splice completes first. (Our own clearDrawings persists explicitly after removeOverlay too.)
+  const overlayHooks = {
+    onDrawEnd: () => persist(),
+    onPressedMoveEnd: () => persist(),
+    onRemoved: () => queueMicrotask(persist),
+  };
+
   const startDraw = (name: string) => {
-    chart.current?.createOverlay({
-      name,
-      groupId: USER,
-      onDrawEnd: () => persist(),
-      onPressedMoveEnd: () => persist(),
-      onRemoved: () => persist(),
-    });
+    chart.current?.createOverlay({ name, groupId: USER, ...overlayHooks });
   };
 
   const clearDrawings = () => {
@@ -252,15 +257,7 @@ export function TradeChart({
     c.removeOverlay({ groupId: USER });
     for (const d of savedDrawings) {
       try {
-        c.createOverlay({
-          name: d.name,
-          groupId: USER,
-          points: d.points,
-          extendData: d.extendData,
-          onDrawEnd: () => persist(),
-          onPressedMoveEnd: () => persist(),
-          onRemoved: () => persist(),
-        });
+        c.createOverlay({ name: d.name, groupId: USER, points: d.points, extendData: d.extendData, ...overlayHooks });
       } catch {
         /* skip a malformed saved overlay */
       }

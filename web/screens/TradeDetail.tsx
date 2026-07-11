@@ -34,19 +34,24 @@ export function TradeDetail({ id }: { id: string }) {
     const body = pending.current;
     pending.current = null;
     saving.current = true;
-    putDrawings.mutate(body, {
-      onSettled: () => {
+    // mutateAsync returns a real promise; its .finally runs even after this component unmounts (unlike
+    // mutate's per-call callbacks, which TanStack Query drops on unmount). So a queued edit is drained
+    // and sent even when the user navigates away mid-save — and serialization (one in flight) keeps the
+    // writes in send-order so the last edit wins.
+    putDrawings
+      .mutateAsync(body)
+      .catch(() => {}) // a failed PUT shouldn't wedge the queue; the next edit re-sends the full set
+      .finally(() => {
         saving.current = false;
         if (pending.current !== null) doSave(); // a newer edit arrived mid-save — send it next, in order
-      },
-    });
+      });
   };
   const flush = () => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = null;
     doSave();
   };
-  useEffect(() => () => flush(), []); // flush on unmount (a queued mutate still settles post-unmount)
+  useEffect(() => () => flush(), []); // flush on unmount; an in-flight save's .finally drains the queue
   const onDrawingsChange = (d: Drawing[]) => {
     pending.current = d;
     if (saveTimer.current) clearTimeout(saveTimer.current);
