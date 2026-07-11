@@ -151,10 +151,13 @@ export function TradeChart({
     c.scrollToTimestamp(to, 0);
   };
 
-  // Reload the series on ANY candle change — including value-only updates with an unchanged bar count
-  // (today's bar after a sync, or a whole-series back-adjust after a split), which is why the deps
-  // fingerprint the first/last CLOSE, not just timestamps. Only re-fit the view when symbol/res
-  // actually changed, so a background refetch refreshes prices without yanking the user's pan/zoom.
+  // Reload the series on ANY candle change. We depend on the `candles` array by REFERENCE: React
+  // Query's structural sharing hands back a new array iff some OHLCV field actually changed (today's
+  // bar after a sync, a whole-series split back-adjust, a corrected interior bar, a volume-only
+  // revision) and the same reference otherwise — so this reruns exactly when the data changed, never
+  // on an incidental re-render. Only re-fit the view when symbol/res changed, so a background refetch
+  // refreshes prices without yanking the user's pan/zoom. (TradeDetail passes a stable NO_CANDLES
+  // fallback so an unsettled query doesn't churn this effect.)
   useEffect(() => {
     const c = chart.current;
     if (!c) return;
@@ -172,15 +175,7 @@ export function TradeChart({
       fitAndScroll(c, focusFrom, focusTo);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    symbol,
-    res,
-    candles.length,
-    candles[0]?.time,
-    candles[candles.length - 1]?.time,
-    candles[0]?.close,
-    candles[candles.length - 1]?.close,
-  ]);
+  }, [symbol, res, candles]);
 
   // Serialize the user's drawings to our persistence shape (timestamp+value only; strip dataIndex).
   const persist = () => {

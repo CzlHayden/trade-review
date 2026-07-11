@@ -1,15 +1,16 @@
 import { useMemo, useState, useRef, useEffect, type ReactNode } from "react";
 import { useTradeDetail, useCandles, useMeta, useTheme, useDrawings, usePutDrawings } from "../lib/hooks";
-import type { Drawing } from "../lib/api";
+import type { Drawing, Candle } from "../lib/api";
 import type { Res } from "../components/TradeChart";
 import { money, price, pct, rMultiple, signClass, date, dateTime, holdTime, qty } from "../lib/format";
 import { FlagChips } from "../components/FlagChips";
 import { TradeChart } from "../components/TradeChart";
 import { JournalEditor } from "../components/JournalEditor";
 
-// Stable identity so the chart's hydrate effect doesn't re-run (and wipe fresh drawings) while the
-// drawings query is unsettled.
+// Stable identities so the chart's data/hydrate effects (which dep on these props by reference) don't
+// re-run on every render while the queries are unsettled.
 const NO_DRAWINGS: Drawing[] = [];
+const NO_CANDLES: Candle[] = [];
 
 export function TradeDetail({ id }: { id: string }) {
   const { data, isLoading } = useTradeDetail(id);
@@ -21,19 +22,31 @@ export function TradeDetail({ id }: { id: string }) {
   const drawings = useDrawings(id);
   const putDrawings = usePutDrawings(id);
 
-  // Debounce drawing saves; flush the pending save on unmount so the last edit before navigating away
-  // is never lost.
+  // Debounce drawing saves, and SERIALIZE them — never two PUTs in flight at once. Each PUT replaces
+  // the full drawing set, so the last edit wins only if requests reach the server in send-order;
+  // overlapping requests could arrive out of order and durably persist a stale set. `saving` gates a
+  // single in-flight save; a newer edit queued while one is in flight is sent on settle.
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<Drawing[] | null>(null);
+  const saving = useRef(false);
+  const doSave = () => {
+    if (saving.current || pending.current === null) return;
+    const body = pending.current;
+    pending.current = null;
+    saving.current = true;
+    putDrawings.mutate(body, {
+      onSettled: () => {
+        saving.current = false;
+        if (pending.current !== null) doSave(); // a newer edit arrived mid-save — send it next, in order
+      },
+    });
+  };
   const flush = () => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = null;
-    if (pending.current) {
-      putDrawings.mutate(pending.current);
-      pending.current = null;
-    }
+    doSave();
   };
-  useEffect(() => () => flush(), []); // flush on unmount
+  useEffect(() => () => flush(), []); // flush on unmount (a queued mutate still settles post-unmount)
   const onDrawingsChange = (d: Drawing[]) => {
     pending.current = d;
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -90,7 +103,7 @@ export function TradeDetail({ id }: { id: string }) {
 
       <TradeChart
         symbol={t.symbol}
-        candles={candles.data?.candles ?? []}
+        candles={candles.data?.candles ?? NO_CANDLES}
         res={candles.data?.res ?? "1d"}
         requestedRes={reqRes}
         onRes={setReqRes}
