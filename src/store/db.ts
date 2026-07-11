@@ -7,5 +7,8 @@ export function openDb(path: string): Database {
   const db = new Database(path, { create: true });
   db.run("PRAGMA journal_mode = WAL;");
   db.run("PRAGMA foreign_keys = ON;");
+  // Wait (up to 5s) for a competing writer instead of failing immediately — e.g. the CLI sync
+  // (src/sync/run.ts) running while the server holds a write. Prevents sporadic SQLITE_BUSY.
+  db.run("PRAGMA busy_timeout = 5000;");
   return db;
 }

@@ -153,7 +153,12 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
           if (!allTrades(db).some((t) => t.id === id)) {
             return json({ error: "trade not found" }, 404);
           }
-          const b = (await req.json()) as any;
+          let b: any;
+          try {
+            b = await req.json();
+          } catch {
+            return json({ error: "invalid JSON body" }, 400);
+          }
           if (!validScore(b.conviction) || !validScore(b.rating)) {
             return json({ error: "conviction/rating must be an integer 1..5 or null" }, 400);
           }
@@ -220,7 +225,12 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
         if (!isValidIsoWeek(isoWeek)) return json({ error: "bad ISO week (want canonical YYYY-Www)" }, 400);
         const { start, end } = weekRange(isoWeek);
         if (method === "PUT") {
-          const b = (await req.json()) as any;
+          let b: any;
+          try {
+            b = await req.json();
+          } catch {
+            return json({ error: "invalid JSON body" }, 400);
+          }
           const watchlist: WatchlistItem[] = Array.isArray(b.watchlist)
             ? b.watchlist.map((w: any) => ({
                 symbol: String(w.symbol),
