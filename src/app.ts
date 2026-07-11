@@ -72,7 +72,8 @@ export function main(): void {
     port: Number(process.env.PORT ?? 8123),
     async fetch(req) {
       const url = new URL(req.url);
-      if (url.pathname.startsWith("/api/")) return api(req);
+      // Include the bare "/api" so a probe there gets the API's JSON 404, not the SPA shell.
+      if (url.pathname === "/api" || url.pathname.startsWith("/api/")) return api(req);
       return (await serveStatic(req)) ?? new Response("Not found", { status: 404 });
     },
   });

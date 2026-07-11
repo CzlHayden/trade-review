@@ -79,6 +79,13 @@ test("unknown /api path 404s as JSON", async () => {
   expect(res.headers.get("content-type")).toContain("application/json");
 });
 
+test("the bare /api root returns the API's JSON 404 (not the SPA shell)", async () => {
+  const { app } = await api();
+  const res = await app(new Request("http://x/api"));
+  expect(res.status).toBe(404);
+  expect(res.headers.get("content-type")).toContain("application/json");
+});
+
 test("PUT journal with a manual stop recomputes R via rebuild", async () => {
   const { app } = await api();
   const id = ((await (await app(new Request("http://x/api/trades"))).json()) as any)[0].id;

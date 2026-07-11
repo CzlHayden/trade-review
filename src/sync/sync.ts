@@ -1,6 +1,16 @@
 import type { Database } from "bun:sqlite";
 import type { CandleSource, FutuClient } from "../domain/ports";
-import type { Candle, Flag, RawFill, RawPosition, RuleConfig, SeedPosition, Trade } from "../domain/types";
+import type {
+  Candle,
+  Flag,
+  RawFill,
+  RawOrder,
+  RawPosition,
+  RuleConfig,
+  SeedPosition,
+  SyncState,
+  Trade,
+} from "../domain/types";
 import { buildTrades } from "../core/trade-builder";
 import { inferStops } from "../core/stop-inference";
 import { computeRisk } from "../core/risk";
@@ -115,6 +125,12 @@ function recentClosedTrades(prior: Trade[], t: Trade): Trade[] {
  * Phase 1 — pull raw data from OpenD and persist it (raw upserts are keyed/idempotent). Touches
  * the network; does NOT rebuild derived data. Returns the count of real accounts pulled so the
  * `runSync` wrapper can assemble its summary.
+ *
+ * All network results are GATHERED first, then written in ONE transaction. This makes the raw store
+ * update atomic: a concurrent (journal-triggered) rebuild only ever sees the pre-sync-complete or
+ * post-sync-complete raw set — never a half-pulled one — and a mid-pull network failure writes
+ * nothing (leaving derived data untouched). That is what lets `runSync` lock only the rebuild, not
+ * the network pull, without a journal edit corrupting derived data from a partial raw store.
  */
 export async function pullRaw(
   db: Database,
@@ -128,6 +144,11 @@ export async function pullRaw(
   // the review DB. Sync only recognized markets (skip futures/funds/unknown).
   const accounts = (await client.getAccounts()).filter((a) => a.trdEnv === TRD_ENV_REAL);
 
+  // ---- gather (network only, no writes) ----
+  const allFills: RawFill[] = [];
+  const allOrders: RawOrder[] = [];
+  const cursors: SyncState[] = [];
+  const snapshotBatches: RawPosition[][] = [];
   for (const acc of accounts) {
     const snapshot: RawPosition[] = [];
     for (const market of acc.markets) {
@@ -138,33 +159,37 @@ export async function pullRaw(
       const beginMs = state?.lastSyncedTime ?? fullWindowBegin;
       const endMs = now;
 
-      const fills = await client.getHistoryFills(acc, market, beginMs, endMs);
-      if (fills.length) upsertRawFills(db, fills);
+      allFills.push(...(await client.getHistoryFills(acc, market, beginMs, endMs)));
 
       // Orders MUTATE after creation (a trailed/cancelled stop changes status + auxPrice), and FUTU
       // filters history orders by CREATE time — so an incremental window would never refetch a moved
       // stop. Always pull the full window for orders (volume is low). Bound: orders older than
       // historyDays whose stop moved recently still won't refresh — acceptable for v1 swing horizons.
-      const orders = await client.getHistoryOrders(acc, market, fullWindowBegin, endMs);
-      if (orders.length) upsertRawOrders(db, orders);
+      allOrders.push(...(await client.getHistoryOrders(acc, market, fullWindowBegin, endMs)));
 
       const positions = await client.getPositions(acc, market);
       for (const p of positions) snapshot.push({ ...p, time: now }); // stamp one coherent batch time
 
-      upsertSyncState(db, {
+      cursors.push({
         account: acc.id,
         market: mkt,
         lastSyncedTime: now,
         coverageStart: state?.coverageStart ?? beginMs,
       });
     }
-    // One snapshot batch per account at `now`. Empty batch ⇒ flat account (positionsAt(now) === []).
-    insertPositionSnapshot(db, snapshot);
+    snapshotBatches.push(snapshot); // one batch per account (may be empty ⇒ flat account)
   }
 
-  // Persist the snapshot clock so a later standalone rebuild (journal/config edit) reconciles seeds
-  // against THIS batch, and an all-flat sync (which writes no rows) still reports zero holdings.
-  setConfigValue(db, LAST_SNAPSHOT_TIME, String(now));
+  // ---- write (single atomic transaction) ----
+  db.transaction(() => {
+    if (allFills.length) upsertRawFills(db, allFills);
+    if (allOrders.length) upsertRawOrders(db, allOrders);
+    for (const c of cursors) upsertSyncState(db, c);
+    for (const batch of snapshotBatches) insertPositionSnapshot(db, batch);
+    // Persist the snapshot clock so a later standalone rebuild (journal/config edit) reconciles seeds
+    // against THIS batch, and an all-flat sync (which writes no rows) still reports zero holdings.
+    setConfigValue(db, LAST_SNAPSHOT_TIME, String(now));
+  })();
 
   return { accounts: accounts.length };
 }
