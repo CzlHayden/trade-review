@@ -49,6 +49,28 @@ test("a range ending near now refetches the tail (partial last bar)", async () =
   expect(hits).toBe(2);
 });
 
+test("a near-now window whose closed prefix is cached refetches only the live tail, not the whole window", async () => {
+  const d = db();
+  const now = 100 * DAY;
+  const calls: Array<[number, number]> = [];
+  const src = {
+    getCandles: async (_s: string, from: number, to: number) => {
+      calls.push([from, to]);
+      return bars([from, to]);
+    },
+  };
+  const c = cachedCandles(d, src, { now });
+  const closedBefore = now - 2 * DAY - DAY; // TAIL_MS (2d) + one bar-width (1d)
+  // First view of a window that reaches `now`: cold cache, fetches the whole span.
+  await c.getCandles("US.X", 1 * DAY, now, DAY);
+  // Second view of the same window: the immutable prefix is cached, so only the live tail is refetched.
+  await c.getCandles("US.X", 1 * DAY, now, DAY);
+  expect(calls.length).toBe(2);
+  expect(calls[0]![0]).toBe(1 * DAY); // first fetch spans from the window start
+  expect(calls[1]![0]).toBe(closedBefore); // second fetch starts at the closed boundary — tail only
+  expect(calls[1]![0]).toBeGreaterThan(1 * DAY);
+});
+
 test("two DISJOINT ranges do not mark the gap between them as covered", async () => {
   const d = db();
   let hits = 0;

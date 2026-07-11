@@ -43,34 +43,50 @@ test("15m window: fromMs = open - 2d when well within reach", () => {
   expect(w.fromMs).toBe(openTime - 2 * DAY);
 });
 
-test("open trade (closeTime null) uses now as the end for toMs padding", () => {
+test("open trade (closeTime null) ends at now + the resolution's forward window", () => {
   const openTime = NOW - 5 * DAY;
-  const dayRes = windowFor(openTime, null, NOW, "1d");
-  const hourRes = windowFor(openTime, null, NOW, "1h");
-  const fifteenRes = windowFor(openTime, null, NOW, "15m");
-  expect(dayRes.toMs).toBeGreaterThanOrEqual(NOW + 2 * DAY);
-  expect(hourRes.toMs).toBe(NOW + 2 * DAY);
-  expect(fifteenRes.toMs).toBe(NOW + DAY);
+  // end = now for an open trade, so toMs = now + FORWARD_MS[res] (span*0.5 is smaller here).
+  expect(windowFor(openTime, null, NOW, "1d").toMs).toBe(NOW + 90 * DAY);
+  expect(windowFor(openTime, null, NOW, "1h").toMs).toBe(NOW + 20 * DAY);
+  expect(windowFor(openTime, null, NOW, "15m").toMs).toBe(NOW + 4 * DAY);
 });
 
-test("closed trade extends the forward window to now (post-trade context), view stays on the trade", () => {
+test("closed trade loads a bounded block of post-trade context; the initial view stays on the trade", () => {
   const openTime = NOW - 40 * DAY;
   const closeTime = NOW - 30 * DAY;
   for (const res of ["1d", "1wk", "1mo", "3mo"] as const) {
     const w = windowFor(openTime, closeTime, NOW, res);
-    expect(w.toMs).toBeGreaterThanOrEqual(NOW); // loads up to today, not just a few bars past the close
-    expect(w.focusTo).toBeLessThan(NOW); // but first paint is still centered on the trade, not on today
-    expect(w.focusTo).toBeGreaterThanOrEqual(closeTime);
+    expect(w.toMs).toBeGreaterThan(closeTime + 20 * DAY); // real post-trade context, not a couple of bars
+    expect(w.focusTo).toBeGreaterThanOrEqual(closeTime); // first paint still brackets the trade…
+    expect(w.focusTo).toBeLessThan(w.toMs); // …not the far end of the loaded window
   }
 });
 
-test("closed intraday trade within reach also loads forward to now", () => {
+test("closed intraday trade loads forward post-trade context too", () => {
   const openTime = NOW - 5 * DAY;
   const closeTime = NOW - 4 * DAY;
   for (const res of ["1h", "15m"] as const) {
     const w = windowFor(openTime, closeTime, NOW, res);
-    expect(w.toMs).toBeGreaterThanOrEqual(NOW);
+    expect(w.toMs).toBeGreaterThan(closeTime + 2 * DAY);
     expect(w.focusTo).toBeGreaterThanOrEqual(closeTime);
+  }
+});
+
+test("an old closed trade's forward window stays historical (below now) so the cache serves it offline", () => {
+  const openTime = NOW - 400 * DAY;
+  const closeTime = NOW - 380 * DAY;
+  const w = windowFor(openTime, closeTime, NOW, "1d");
+  expect(w.toMs).toBeLessThan(NOW); // fully in the past → fully cacheable, no refetch, renders offline
+  expect(w.toMs).toBeGreaterThan(closeTime); // and still shows post-trade context
+});
+
+test("a trade older than the intraday reach collapses to an empty window (route then coarsens to 1d)", () => {
+  const openTime = NOW - 800 * DAY;
+  const closeTime = NOW - 799 * DAY;
+  for (const res of ["1h", "15m"] as const) {
+    const w = windowFor(openTime, closeTime, NOW, res);
+    expect(w.toMs).toBe(w.fromMs); // collapsed — NOT a 720d/58d window of unrelated recent bars
+    expect(w.focusFrom).toBe(w.focusTo);
   }
 });
 

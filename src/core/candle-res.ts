@@ -40,16 +40,18 @@ const LOOKBACK_MS: Record<Res, number> = {
   "3mo": 25 * YEAR_MS,
 };
 
-// Minimum pad AFTER the trade closes (a few bars of breathing room), per resolution. This is only the
-// FLOOR: the window is also always extended forward to `now` (see windowFor) so post-trade price
-// action is reviewable — the tail matters only for an open trade or one that closed moments ago.
-const MIN_TAIL_MS: Record<Res, number> = {
-  "15m": DAY_MS,
-  "1h": 2 * DAY_MS,
-  "1d": 2 * DAY_MS,
-  "1wk": 7 * DAY_MS,
-  "1mo": 30 * DAY_MS,
-  "3mo": 91 * DAY_MS,
+// How much context to load AFTER the trade closes, per resolution, so you can review how price acted
+// post-exit (kept running? reversed? did the stop save you?). Deliberately BOUNDED, not "up to now":
+// an OLD closed trade's window then stays entirely historical, so the candle cache serves it in full
+// (offline, no refetch). A recent trade's window still runs past `now` (clipped to real data), and
+// only its live tail refetches. Scaled up a little by the trade's own span for long holds.
+const FORWARD_MS: Record<Res, number> = {
+  "15m": 4 * DAY_MS,
+  "1h": 20 * DAY_MS,
+  "1d": 90 * DAY_MS,
+  "1wk": YEAR_MS,
+  "1mo": 3 * YEAR_MS,
+  "3mo": 5 * YEAR_MS,
 };
 
 // Yahoo intraday retention, applied relative to `now` (not `openTime`) since it bounds how far
@@ -63,24 +65,19 @@ export function windowFor(openTime: number, closeTime: number | null, now: numbe
   const span = Math.max(end - openTime, 0);
 
   const reach = REACH_MS[res];
-  // Intraday (reach-limited) keeps a fixed tail; daily and coarser scale the tail with the trade span
-  // (a multi-year hold wants more breathing room after the close). This preserves the exact 1d/1h/15m
-  // windows from before the higher timeframes were added.
-  const tail = reach !== undefined ? MIN_TAIL_MS[res] : Math.max(span * 0.05, MIN_TAIL_MS[res]);
-
   let fromMs = openTime - LOOKBACK_MS[res];
   if (reach !== undefined) fromMs = Math.max(fromMs, now - reach);
 
-  // Load forward all the way to `now`, not just a few bars past the close: reviewing a trade means
-  // seeing what price did AFTER the exit (did it keep running, did the stop save you). `end + tail`
-  // is only a floor for an open/just-closed trade. The initial view still centers on the trade
-  // (focusFrom/focusTo below), so the extra bars are there to scroll into, not zoomed away.
-  let toMs = Math.max(end + tail, now);
-  // A trade entirely older than the intraday reach: its close is before the clamped-forward fromMs,
-  // so there is no in-reach data for it. Collapse to an empty window rather than load 720d/58d of
-  // unrelated recent bars — the route's coarsen-on-empty ladder then falls back to 1d (no reach limit).
-  if (reach !== undefined && end < fromMs) toMs = fromMs;
-  if (fromMs > toMs) toMs = fromMs; // safety: never invert
+  // Load a bounded block of post-trade context (see FORWARD_MS), scaled up a little for long holds.
+  // Bounded rather than `now` on purpose: an old closed trade's window stays historical and fully
+  // cacheable; a recent trade's window runs past `now` and only its live tail refetches. The initial
+  // view still centers on the trade (focusFrom/focusTo below) — the extra bars are there to scroll into.
+  const forward = Math.max(FORWARD_MS[res], span * 0.5);
+  let toMs = end + forward;
+  // A trade older than the intraday reach clamps fromMs forward past toMs; collapse to an empty window
+  // rather than invert or load reach-worth of unrelated recent bars (the route's coarsen-on-empty ladder
+  // then falls back to 1d, which has no reach limit).
+  if (fromMs > toMs) toMs = fromMs;
 
   const focusPad = Math.max(span * 0.1, DAY_MS);
   // Clamped into [fromMs, toMs]: the initial visible range can never exceed the loaded data.

@@ -110,10 +110,9 @@ function chartStyles(c: ReturnType<typeof themeColors>) {
 
 export interface ChartMarks {
   avgEntry: number;
-  plannedStop: number | null; // manual ?? initial — the R basis
-  effectiveStop: number | null; // last active/trailing stop
+  plannedStop: number | null; // manual ?? initial — the R basis (drawn dashed when it differs from the effective stop)
+  effectiveStop: number | null; // last active/trailing stop — the primary SL, drawn solid red
   effectiveTp: number | null;
-  riskKnown: boolean; // dash the planned stop when risk was not computed (seed/profit-side)
   direction: "LONG" | "SHORT";
 }
 
@@ -303,12 +302,20 @@ export function TradeChart({
     c.overrideYAxis({
       paneId: "candle_pane", // the price axis specifically — NOT the volume pane
       createRange: ({ defaultRange }) => {
-        let { from, to } = defaultRange;
+        const dFrom = defaultRange.from;
+        const dTo = defaultRange.to;
+        // Only pull a mark into view if it's within ~one screenful of the visible candles. On the trade
+        // view the stop/entry are right there, so they show; but after scrolling deep into post-trade
+        // data where price ran far from the stop, we don't squash the candles into a sliver to reach it.
+        const slack = dTo - dFrom || 1;
+        let from = dFrom;
+        let to = dTo;
         for (const v of rangeMarks) {
+          if (v < dFrom - slack || v > dTo + slack) continue;
           from = Math.min(from, v);
           to = Math.max(to, v);
         }
-        if (from === defaultRange.from && to === defaultRange.to) return defaultRange;
+        if (from === dFrom && to === dTo) return defaultRange;
         const pad = (to - from) * 0.04 || 1; // a little breathing room around a mark at the extreme
         from -= pad;
         to += pad;

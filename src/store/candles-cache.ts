@@ -94,7 +94,8 @@ export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpt
   return {
     async getCandles(symbol, fromMs, toMs, resMs) {
       const now = typeof opts.now === "function" ? opts.now() : opts.now;
-      const covered = isCovered(intervals(db, symbol, resMs), fromMs, toMs);
+      const ivs = intervals(db, symbol, resMs);
+      const covered = isCovered(ivs, fromMs, toMs);
       // A bar starting at `t` isn't closed until `t + resMs <= now`, so the partial-bar tail is one
       // bar-width PLUS the fixed TAIL margin. This matters for weekly/monthly/quarterly, where a bar
       // stays in progress for up to 7/30/91 days — a fixed 2-day tail would cache a partial coarse bar
@@ -103,21 +104,32 @@ export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpt
       const nearNow = toMs >= closedBefore;
       if (covered && !nearNow) return readBars(db, symbol, resMs, fromMs, toMs);
 
+      // Fetch only what's missing. When the closed prefix [fromMs, closedBefore] is already cached,
+      // refetch just the live tail [closedBefore, toMs] rather than the whole window — so a window whose
+      // bounded post-trade context reaches the last couple of days (near-now) doesn't re-pull a year of
+      // immutable history on every view. The cached prefix is served and stitched with the fresh tail.
+      const closedEnd = Math.min(toMs, closedBefore);
+      const prefixCached = closedEnd <= fromMs || isCovered(ivs, fromMs, closedEnd);
+      const fetchFrom = nearNow && prefixCached ? Math.max(fromMs, closedBefore) : fromMs;
+
       let fresh: Candle[] = [];
       try {
-        fresh = await source.getCandles(symbol, fromMs, toMs, resMs);
+        fresh = await source.getCandles(symbol, fetchFrom, toMs, resMs);
       } catch {
+        // Source down: serve only if a single stored interval FULLY covers the request — never a partial
+        // window, so a wrong excursion range can't reach MAE/MFE; otherwise degrade to [].
         return covered ? readBars(db, symbol, resMs, fromMs, toMs) : [];
       }
       if (fresh.length) {
         writeBars(db, symbol, resMs, fresh);
-        // Record coverage only up to the CLOSED boundary. A near-now fetch may include a partial
-        // current bar; marking [from,to] fully covered would later (once now advances past the tail)
-        // serve that stale partial bar without refetching. Capping coverage at the closed boundary
-        // (now − TAIL − one bar-width) forces the tail to refetch until its bars close. The just-fetched
+        // Record coverage only up to the CLOSED boundary, and only for the range we actually fetched. A
+        // near-now fetch may include a partial current bar; marking [from,to] fully covered would later
+        // (once now advances past the tail) serve that stale partial bar without refetching. Capping at
+        // the closed boundary (now − TAIL − one bar-width) forces the tail to refetch until it closes;
+        // a tail-only fetch adds no new coverage (the prefix's coverage already stands). The just-fetched
         // bars are still returned to this caller.
         const coverEnd = Math.min(toMs, closedBefore);
-        if (coverEnd > fromMs) addCoverage(db, symbol, resMs, fromMs, coverEnd, now);
+        if (coverEnd > fetchFrom) addCoverage(db, symbol, resMs, fetchFrom, coverEnd, now);
         return readBars(db, symbol, resMs, fromMs, toMs);
       }
       // Empty fresh response — the live source degrades fetch/parse failures to [] (it doesn't throw),
