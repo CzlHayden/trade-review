@@ -175,6 +175,14 @@ export interface CurrencyStats {
   avgR: number | null; // mean rMultiple over trades that have one
   avgMae: number | null;
   avgMfe: number | null;
+  // Position sizing. The % figures are the headline (1% vs 0.5% of the account per trade is a very
+  // different risk posture); the dollar figures are context. % is null until a funds snapshot exists.
+  avgRisk: number | null; // mean planned risk ($ = 1R) over trades that have one
+  avgRiskPct: number | null; // mean of per-trade (risk / account equity) — typical risk per trade, in %
+  avgPositionSize: number; // mean entry notional (avgEntry × maxQty) — your typical trade size ($)
+  maxPositionSize: number; // largest single-trade entry notional ($)
+  avgSizePct: number | null; // mean of per-trade (notional / account equity) — typical size, in %
+  sizingApprox: boolean; // true when any % here used a fallback (latest, not at-open) equity → show "≈"
   equityCurve: Array<{ time: number; cumPnl: number }>;
 }
 

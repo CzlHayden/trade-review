@@ -13,9 +13,9 @@ function tr(over: Partial<Trade>): Trade {
     status: "closed",
     openTime: over.openTime ?? 1000,
     closeTime: over.closeTime ?? 2000,
-    avgEntry: 10,
+    avgEntry: over.avgEntry ?? 10,
     avgExit: 11,
-    maxQty: 100,
+    maxQty: over.maxQty ?? 100,
     realizedPnl: over.realizedPnl ?? 0,
     fees: 0,
     holdSeconds: 0,
@@ -23,7 +23,7 @@ function tr(over: Partial<Trade>): Trade {
     fillIds: [],
     effectiveStop: null,
     effectiveTp: null,
-    risk: null,
+    risk: over.risk ?? null,
     rMultiple: over.rMultiple ?? null,
     mae: over.mae ?? null,
     mfe: over.mfe ?? null,
@@ -55,6 +55,58 @@ test("win rate, avg win/loss, expectancy", () => {
   expect(usd.avgWin).toBe(150);
   expect(usd.avgLoss).toBe(75); // positive magnitude
   expect(usd.expectancy).toBe(0.5 * 150 - 0.5 * 75); // 37.5
+});
+
+test("avg/max position size = entry notional (avgEntry × maxQty), per currency", () => {
+  const s = computeStats([
+    tr({ currency: "USD", avgEntry: 10, maxQty: 100, realizedPnl: 5 }), // notional 1,000
+    tr({ currency: "USD", avgEntry: 20, maxQty: 150, realizedPnl: 5 }), // notional 3,000
+    tr({ currency: "HKD", avgEntry: 50, maxQty: 40, realizedPnl: 5 }), // notional 2,000 (separate currency)
+  ]);
+  const usd = s.byCurrency.find((c) => c.currency === "USD")!;
+  expect(usd.avgPositionSize).toBe(2000); // (1,000 + 3,000) / 2
+  expect(usd.maxPositionSize).toBe(3000);
+  expect(s.byCurrency.find((c) => c.currency === "HKD")!.avgPositionSize).toBe(2000);
+});
+
+test("avg risk % / size % use the injected equity resolver; null without equity", () => {
+  const trades = [
+    tr({ currency: "USD", avgEntry: 10, maxQty: 100, risk: 50, realizedPnl: 5 }), // notional 1,000
+    tr({ currency: "USD", avgEntry: 20, maxQty: 100, risk: 150, realizedPnl: 5 }), // notional 2,000
+  ];
+  // No resolver → % are null, dollar averages still computed.
+  const bare = computeStats(trades).byCurrency[0]!;
+  expect(bare.avgRiskPct).toBeNull();
+  expect(bare.avgSizePct).toBeNull();
+  expect(bare.avgRisk).toBe(100); // (50 + 150) / 2
+  expect(bare.sizingApprox).toBe(false);
+
+  // Equity 10,000 (exact) for every trade → riskPct = {0.5%, 1.5%} avg 1%; sizePct = {10%, 20%} avg 15%.
+  const s = computeStats(trades, () => ({ equity: 10_000, approx: false })).byCurrency[0]!;
+  expect(s.avgRiskPct).toBeCloseTo(0.01);
+  expect(s.avgSizePct).toBeCloseTo(0.15);
+  expect(s.sizingApprox).toBe(false);
+});
+
+test("sizingApprox is true when any contributing trade used a fallback (approximate) equity", () => {
+  const trades = [
+    tr({ id: "a", currency: "USD", avgEntry: 10, maxQty: 100, risk: 50, realizedPnl: 5 }),
+    tr({ id: "b", currency: "USD", avgEntry: 20, maxQty: 100, risk: 150, realizedPnl: 5 }),
+  ];
+  // Trade b's equity is a latest-fallback (approx) → the aggregate is flagged approximate.
+  const s = computeStats(trades, (t) => ({ equity: 10_000, approx: t.id === "b" })).byCurrency[0]!;
+  expect(s.avgRiskPct).toBeCloseTo(0.01);
+  expect(s.sizingApprox).toBe(true);
+});
+
+test("avg risk % skips trades whose equity is unknown (null resolver result)", () => {
+  const trades = [
+    tr({ id: "a", currency: "USD", avgEntry: 10, maxQty: 100, risk: 50, realizedPnl: 5 }), // equity known
+    tr({ id: "b", currency: "USD", avgEntry: 20, maxQty: 100, risk: 400, realizedPnl: 5 }), // equity unknown → skipped
+  ];
+  const s = computeStats(trades, (t) => ({ equity: t.id === "a" ? 10_000 : null, approx: false })).byCurrency[0]!;
+  expect(s.avgRiskPct).toBeCloseTo(0.005); // only trade a: 50 / 10,000
+  expect(s.avgSizePct).toBeCloseTo(0.1); // only trade a: 1,000 / 10,000
 });
 
 test("avgR/avgMae/avgMfe ignore trades that lack them; null when none", () => {

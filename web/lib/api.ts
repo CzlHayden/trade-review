@@ -33,6 +33,8 @@ export interface TradeDetail {
   riskPct: number | null;
   accountEquity: number | null;
   equityBasis: "at_open" | "latest" | "none";
+  positionSize: number; // capital committed at max size (avgEntry × maxQty)
+  sizePct: number | null; // positionSize / account equity
   currentQty: number; // signed current holding from the latest snapshot (0 when flat/closed)
   positionAsOf: number; // that snapshot's clock (how fresh the holding/stop are)
 }
@@ -45,13 +47,16 @@ export interface OpenPosition {
   avgCost: number;
   effectiveStop: number | null;
   openRisk: number | null;
+  tradeId: string | null;
 }
 export interface CurrencyPositions {
   currency: string;
   positions: OpenPosition[];
   totalOpenRisk: number | null;
+  deployed: number;
   equity: number | null;
   riskPct: number | null;
+  deployedPct: number | null;
 }
 export interface PositionsResponse {
   byCurrency: CurrencyPositions[];
@@ -62,6 +67,7 @@ export interface Meta {
   currencies: string[];
   setups: string[];
   tags: string[];
+  emotions: string[];
   coverageStart: number | null;
   appVersion: string;
 }
