@@ -64,11 +64,26 @@ export function TradeDetail({ id }: { id: string }) {
     () => ({
       avgEntry: t?.avgEntry ?? 0,
       plannedStop: data?.journal?.manualStop ?? data?.stop?.initialStop ?? null, // the R basis
-      effectiveStop: t?.effectiveStop ?? null,
+      // Solid red "active SL" line. For an OPEN trade show the stop that's actually working now (manual
+      // override, else the newest resting stop) so the chart agrees with the Live position panel — a
+      // cancelled stop doesn't leave a phantom SL. For a CLOSED trade keep the post-hoc effective stop.
+      effectiveStop:
+        t?.status === "open"
+          ? data?.journal?.manualStop ?? data?.stop?.liveStop ?? null
+          : t?.effectiveStop ?? null,
       effectiveTp: t?.effectiveTp ?? null,
       direction: t?.direction ?? "LONG",
     }),
-    [t?.avgEntry, data?.journal?.manualStop, data?.stop?.initialStop, t?.effectiveStop, t?.effectiveTp, t?.direction],
+    [
+      t?.avgEntry,
+      t?.status,
+      data?.journal?.manualStop,
+      data?.stop?.initialStop,
+      data?.stop?.liveStop,
+      t?.effectiveStop,
+      t?.effectiveTp,
+      t?.direction,
+    ],
   );
 
   // Current signed holding comes from the server (latest positions snapshot — FUTU's ground truth),
