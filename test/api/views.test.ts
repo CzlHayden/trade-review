@@ -103,6 +103,33 @@ test("tradeDetail falls back to latest equity (approximate) when none precedes t
   expect(det.riskPct).toBeCloseTo(50 / 20_000);
 });
 
+test("tradeDetail reports the current holding from the latest snapshot for an open trade", () => {
+  const d = db();
+  d.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop, risk)
+     VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95, 50)`,
+  );
+  insertPositionSnapshot(d, [
+    { account: "a", symbol: "US.AAPL", qty: 6, avgCost: 100, currency: "USD", time: 5000 }, // scaled out to 6
+  ]);
+  const det = tradeDetail(d, "t1")!;
+  expect(det.currentQty).toBe(6); // from the snapshot, NOT max_qty (10)
+  expect(det.positionAsOf).toBe(5000);
+});
+
+test("tradeDetail current holding is 0 for a closed trade and when no snapshot matches", () => {
+  const d = db();
+  d.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, close_time, avg_entry, avg_exit, max_qty, realized_pnl, fees, coverage_ok)
+     VALUES ('t1','a','US.AAPL','USD','LONG','closed', 1000, 2000, 100, 110, 10, 100, 0, 1)`,
+  );
+  // A snapshot exists for a DIFFERENT symbol; the closed trade must still report flat.
+  insertPositionSnapshot(d, [
+    { account: "a", symbol: "US.MSFT", qty: 3, avgCost: 300, currency: "USD", time: 5000 },
+  ]);
+  expect(tradeDetail(d, "t1")!.currentQty).toBe(0);
+});
+
 test("latestSnapshotTime prefers the marker, backfilling from stored snapshots when it's absent", () => {
   const d = db();
   // Migrated (pre-marker) DB: no marker, but raw_positions has the last sync batch → use MAX(time).

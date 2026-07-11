@@ -74,6 +74,12 @@ export interface TradeDetail {
   riskPct: number | null;
   accountEquity: number | null; // equity used as the denominator, in the trade's currency
   equityBasis: "at_open" | "latest" | "none";
+  // Current signed holding for an OPEN trade, from the latest positions snapshot (FUTU's own ground
+  // truth) — reversal-safe, unlike summing this trade's fills (a flip-through-zero fill is split across
+  // two trades but returned at full qty). 0 when flat / no snapshot. `positionAsOf` is that snapshot's
+  // clock, so the UI can say how fresh the holding/stop are (they only move on sync).
+  currentQty: number;
+  positionAsOf: number;
 }
 
 export function tradeDetail(db: Database, id: string): TradeDetail | null {
@@ -90,6 +96,14 @@ export function tradeDetail(db: Database, id: string): TradeDetail | null {
   const equityBasis = atOpen !== null ? "at_open" : latest !== null ? "latest" : "none";
   const riskPct =
     trade.risk !== null && equity !== null && equity > 0 ? trade.risk / equity : null;
+  // Current holding from the latest snapshot (only meaningful while open; a closed trade is flat).
+  const positionAsOf = latestSnapshotTime(db);
+  const held =
+    trade.status === "open"
+      ? positionsAt(db, positionAsOf).find(
+          (p) => p.account === trade.account && p.symbol === trade.symbol,
+        )
+      : undefined;
   return {
     trade,
     fills,
@@ -100,6 +114,8 @@ export function tradeDetail(db: Database, id: string): TradeDetail | null {
     riskPct,
     accountEquity: equity,
     equityBasis,
+    currentQty: held?.qty ?? 0,
+    positionAsOf,
   };
 }
 
