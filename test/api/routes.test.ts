@@ -77,3 +77,47 @@ test("unknown /api path 404s as JSON", async () => {
   expect(res.status).toBe(404);
   expect(res.headers.get("content-type")).toContain("application/json");
 });
+
+test("PUT journal with a manual stop recomputes R via rebuild", async () => {
+  const { app } = await api();
+  const id = ((await (await app(new Request("http://x/api/trades"))).json()) as any)[0].id;
+  const put = await app(
+    new Request(`http://x/api/trades/${id}/journal`, {
+      method: "PUT",
+      body: JSON.stringify({
+        thesis: "t", emotion: null, conviction: 4, rating: null, notes: null,
+        manualStop: 95, setup: "breakout", tags: ["a"],
+      }),
+    }),
+  );
+  expect(put.status).toBe(200);
+  const detail: any = await put.json();
+  expect(detail.trade.risk).toBeCloseTo(50);
+  expect(detail.trade.rMultiple).toBeCloseTo(2);
+  expect(detail.journal.setup).toBe("breakout");
+});
+
+test("PUT journal rejects out-of-range conviction", async () => {
+  const { app } = await api();
+  const id = ((await (await app(new Request("http://x/api/trades"))).json()) as any)[0].id;
+  const res = await app(
+    new Request(`http://x/api/trades/${id}/journal`, {
+      method: "PUT",
+      body: JSON.stringify({ conviction: 9, tags: [] }),
+    }),
+  );
+  expect(res.status).toBe(400);
+});
+
+test("weekly entry GET/PUT round-trips and lists that week's trades", async () => {
+  const { app } = await api();
+  await app(
+    new Request("http://x/api/journal/weeks/2026-W28", {
+      method: "PUT",
+      body: JSON.stringify({ marketRead: "risk-on", tradedVsPlan: "ok", watchlist: [] }),
+    }),
+  );
+  const got: any = await (await app(new Request("http://x/api/journal/weeks/2026-W28"))).json();
+  expect(got.marketRead).toBe("risk-on");
+  expect(Array.isArray(got.trades)).toBe(true);
+});

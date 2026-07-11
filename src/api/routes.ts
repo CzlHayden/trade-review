@@ -6,7 +6,15 @@ import type { CandleSource } from "../domain/ports";
 import type { RuleConfig, Trade } from "../domain/types";
 import { computeStats, breakdown } from "../core/analytics";
 import { allTrades, flagsForTrade } from "../store/repos";
-import { holdBucket } from "../domain/time";
+import { holdBucket, isoWeekOf, weekRange } from "../domain/time";
+import type { Journal, WatchlistItem } from "../domain/journal-types";
+import {
+  getWeeklyEntry,
+  tradesInRange,
+  upsertJournal,
+  upsertWeeklyEntry,
+} from "../store/journal";
+import { rebuildDerived } from "../sync/sync";
 import {
   latestSnapshotTime,
   metaView,
@@ -86,6 +94,11 @@ function breakdownBy(db: Database, by: string) {
   return null;
 }
 
+/** A 1..5 score is valid, or null/absent (the field is optional). */
+function validScore(v: unknown): boolean {
+  return v == null || (typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 5);
+}
+
 /** Group open positions per currency so the wire shape can't be summed across currencies. */
 function positionsByCurrency(positions: OpenPosition[]) {
   const groups = new Map<string, OpenPosition[]>();
@@ -124,12 +137,38 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
       if (seg.length === 2 && seg[1] === "trades" && method === "GET") {
         return json(tradesWithMeta(db));
       }
-      // /api/trades/:id  and  /api/trades/:id/candles
+      // /api/trades/:id  and  /api/trades/:id/candles  and  PUT /api/trades/:id/journal
       if (seg.length >= 3 && seg[1] === "trades") {
         const id = decodeURIComponent(seg[2]!);
         if (seg.length === 3 && method === "GET") {
           const detail = tradeDetail(db, id);
           return detail ? json(detail) : json({ error: "trade not found" }, 404);
+        }
+        if (seg.length === 4 && seg[3] === "journal" && method === "PUT") {
+          if (!allTrades(db).some((t) => t.id === id)) {
+            return json({ error: "trade not found" }, 404);
+          }
+          const b = (await req.json()) as any;
+          if (!validScore(b.conviction) || !validScore(b.rating)) {
+            return json({ error: "conviction/rating must be an integer 1..5 or null" }, 400);
+          }
+          const journal: Journal = {
+            tradeId: id,
+            thesis: b.thesis ?? null,
+            emotion: b.emotion ?? null,
+            conviction: b.conviction ?? null,
+            rating: b.rating ?? null,
+            notes: b.notes ?? null,
+            manualStop: typeof b.manualStop === "number" ? b.manualStop : null,
+            setup: b.setup ?? null,
+            tags: Array.isArray(b.tags) ? b.tags.map(String) : [],
+            updatedAt: deps.now(),
+          };
+          upsertJournal(db, journal);
+          // Setup/tags feed breakdowns and a manual stop feeds risk/R/flags — re-derive through the
+          // single tested pipeline (no OpenD round-trip).
+          await rebuildDerived(db, { candles: deps.candles, config: deps.config, now: deps.now() });
+          return json(tradeDetail(db, id));
         }
         if (seg.length === 4 && seg[3] === "candles" && method === "GET") {
           const trade = allTrades(db).find((t) => t.id === id);
@@ -153,6 +192,44 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
       // GET /api/meta
       if (seg.length === 2 && seg[1] === "meta" && method === "GET") {
         return json(metaView(db));
+      }
+
+      // /api/journal/weeks/:isoWeek  (GET + PUT); trades are associated by date at read time.
+      if (seg.length === 4 && seg[1] === "journal" && seg[2] === "weeks") {
+        const isoWeek = decodeURIComponent(seg[3]!);
+        const { start, end } = weekRange(isoWeek);
+        if (Number.isNaN(start)) return json({ error: "bad ISO week" }, 400);
+        if (method === "PUT") {
+          const b = (await req.json()) as any;
+          const watchlist: WatchlistItem[] = Array.isArray(b.watchlist)
+            ? b.watchlist.map((w: any) => ({
+                symbol: String(w.symbol),
+                note: w.note ?? null,
+                keyLevel: typeof w.keyLevel === "number" ? w.keyLevel : null,
+              }))
+            : [];
+          upsertWeeklyEntry(db, {
+            id: isoWeek,
+            periodStart: start,
+            periodEnd: end,
+            marketRead: b.marketRead ?? null,
+            tradedVsPlan: b.tradedVsPlan ?? null,
+            watchlist,
+            updatedAt: deps.now(),
+          });
+        }
+        if (method === "GET" || method === "PUT") {
+          const entry = getWeeklyEntry(db, isoWeek) ?? {
+            id: isoWeek,
+            periodStart: start,
+            periodEnd: end,
+            marketRead: null,
+            tradedVsPlan: null,
+            watchlist: [],
+            updatedAt: 0,
+          };
+          return json({ ...entry, trades: tradesInRange(db, start, end) });
+        }
       }
 
       return json({ error: "not found" }, 404);
