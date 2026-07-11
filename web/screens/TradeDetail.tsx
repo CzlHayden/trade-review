@@ -1,22 +1,74 @@
-import { useMemo, type ReactNode } from "react";
-import { useTradeDetail, useCandles, useMeta, useTheme } from "../lib/hooks";
+import { useMemo, useState, useRef, useEffect, type ReactNode } from "react";
+import { useTradeDetail, useCandles, useMeta, useTheme, useDrawings, usePutDrawings } from "../lib/hooks";
+import type { Drawing, Candle } from "../lib/api";
+import type { Res } from "../components/TradeChart";
 import { money, price, pct, rMultiple, signClass, date, dateTime, holdTime, qty } from "../lib/format";
 import { FlagChips } from "../components/FlagChips";
 import { TradeChart } from "../components/TradeChart";
 import { JournalEditor } from "../components/JournalEditor";
+
+// Stable identities so the chart's data/hydrate effects (which dep on these props by reference) don't
+// re-run on every render while the queries are unsettled.
+const NO_DRAWINGS: Drawing[] = [];
+const NO_CANDLES: Candle[] = [];
 
 export function TradeDetail({ id }: { id: string }) {
   const { data, isLoading } = useTradeDetail(id);
   const { themeKey } = useTheme();
   const meta = useMeta();
   const t = data?.trade;
-  const res: "day" | "hour" = t && t.holdSeconds !== null && t.holdSeconds < 2 * 86400 ? "hour" : "day";
-  const candles = useCandles(id, res);
-  // Stable marks identity so background refetches don't rerun the chart effect (which calls fitContent
-  // and would reset the user's zoom/pan). Keyed on the primitive fields the chart actually draws.
+  const [reqRes, setReqRes] = useState<Res>("1d");
+  const candles = useCandles(id, reqRes);
+  const drawings = useDrawings(id);
+  const putDrawings = usePutDrawings(id);
+
+  // Debounce drawing saves, and SERIALIZE them — never two PUTs in flight at once. Each PUT replaces
+  // the full drawing set, so the last edit wins only if requests reach the server in send-order;
+  // overlapping requests could arrive out of order and durably persist a stale set. `saving` gates a
+  // single in-flight save; a newer edit queued while one is in flight is sent on settle.
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pending = useRef<Drawing[] | null>(null);
+  const saving = useRef(false);
+  const doSave = () => {
+    if (saving.current || pending.current === null) return;
+    const body = pending.current;
+    pending.current = null;
+    saving.current = true;
+    // mutateAsync returns a real promise; its .finally runs even after this component unmounts (unlike
+    // mutate's per-call callbacks, which TanStack Query drops on unmount). So a queued edit is drained
+    // and sent even when the user navigates away mid-save — and serialization (one in flight) keeps the
+    // writes in send-order so the last edit wins.
+    putDrawings
+      .mutateAsync(body)
+      .catch(() => {}) // a failed PUT shouldn't wedge the queue; the next edit re-sends the full set
+      .finally(() => {
+        saving.current = false;
+        if (pending.current !== null) doSave(); // a newer edit arrived mid-save — send it next, in order
+      });
+  };
+  const flush = () => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    doSave();
+  };
+  useEffect(() => () => flush(), []); // flush on unmount; an in-flight save's .finally drains the queue
+  const onDrawingsChange = (d: Drawing[]) => {
+    pending.current = d;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(flush, 500);
+  };
+  // Stable marks identity so background refetches don't rerun the chart's mark-drawing effect.
+  // Keyed on the primitive fields the chart actually draws.
   const marks = useMemo(
-    () => ({ avgEntry: t?.avgEntry ?? 0, effectiveStop: t?.effectiveStop ?? null, effectiveTp: t?.effectiveTp ?? null, direction: t?.direction ?? "LONG" }),
-    [t?.avgEntry, t?.effectiveStop, t?.effectiveTp, t?.direction],
+    () => ({
+      avgEntry: t?.avgEntry ?? 0,
+      plannedStop: data?.journal?.manualStop ?? data?.stop?.initialStop ?? null, // the R basis
+      effectiveStop: t?.effectiveStop ?? null,
+      effectiveTp: t?.effectiveTp ?? null,
+      riskKnown: (t?.risk ?? null) !== null,
+      direction: t?.direction ?? "LONG",
+    }),
+    [t?.avgEntry, data?.journal?.manualStop, data?.stop?.initialStop, t?.effectiveStop, t?.effectiveTp, t?.risk, t?.direction],
   );
 
   if (isLoading) return <div className="spinner">Loading…</div>;
@@ -55,10 +107,20 @@ export function TradeDetail({ id }: { id: string }) {
       </div>
 
       <TradeChart
-        candles={candles.data ?? []}
+        symbol={t.symbol}
+        candles={candles.data?.candles ?? NO_CANDLES}
+        res={candles.data?.res ?? "1d"}
+        requestedRes={reqRes}
+        onRes={setReqRes}
+        focusFrom={candles.data?.focusFrom ?? 0}
+        focusTo={candles.data?.focusTo ?? 0}
         fills={fills}
         marks={marks}
         themeKey={themeKey}
+        savedDrawings={drawings.data?.drawings ?? NO_DRAWINGS}
+        onDrawingsChange={onDrawingsChange}
+        loading={candles.isFetching}
+        drawingsReady={drawings.isSuccess}
       />
 
       <div className="kpi-row" style={{ marginTop: 12 }}>

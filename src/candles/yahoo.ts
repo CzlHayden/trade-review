@@ -21,6 +21,7 @@ export function yahooSymbol(symbol: string): string {
 export function intervalFor(resMs: number): string {
   if (resMs >= 86_400_000) return "1d";
   if (resMs >= 3_600_000) return "1h";
+  if (resMs >= 900_000) return "15m";
   return "1m";
 }
 

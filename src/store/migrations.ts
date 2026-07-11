@@ -157,6 +157,18 @@ export const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
       );
     `);
   },
+  // v7 — per-trade chart drawings (orphan-tolerant: NO FK to trades, which is rebuilt every sync).
+  // `data` is our own minimal JSON shape (see Drawing in src/store/drawings.ts), never raw
+  // chart-library internals — that keeps the format our contract, not a third party's.
+  (db) => {
+    db.run(`
+      CREATE TABLE chart_drawings (
+        trade_id TEXT PRIMARY KEY,
+        data TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+  },
 ];
 
 export function currentVersion(db: Database): number {

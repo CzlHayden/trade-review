@@ -7,6 +7,7 @@
       "dependencies": {
         "@tanstack/react-query": "^5.101.2",
         "futu-api": "^10.8.6808",
+        "klinecharts": "10.0.0",
         "lightweight-charts": "^5.2.0",
         "react": "^19.2.7",
         "react-dom": "^19.2.7",
@@ -106,6 +107,8 @@
     "fancy-canvas": ["fancy-canvas@2.1.0", "", {}, "sha512-nifxXJ95JNLFR2NgRV4/MxVP45G9909wJTEKz5fg/TZS20JJZA6hfgRVh/bC9bwl2zBtBNcYPjiBE4njQHVBwQ=="],
 
     "futu-api": ["futu-api@10.8.6808", "", { "dependencies": { "bytebuffer": "^5.0.1", "long": "^4.0.0", "protobufjs": "^6.8.8" } }, "sha512-qnlVHoGLiYmHNrdJSnxR0E6HapTmY0gBvsLYWjbZDzSzHFArtsXrj2pSFywF609V23UY97u6YiDnuU1x5qhugg=="],
+
+    "klinecharts": ["klinecharts@10.0.0", "", {}, "sha512-njopc5Wwff83l9R750Yrj+EcmQUe7JUwN4xgmmwhUPX30jd7ZLabBQT5s2+yTaAk98MMqglCE6vqrSnek/ppbg=="],
 
     "lightweight-charts": ["lightweight-charts@5.2.0", "", { "dependencies": { "fancy-canvas": "2.1.0" } }, "sha512-ey3Vas8UhV06ni+LT9TA1nEe4y8So4Mi6CL/oarNHFMyTktz/xy8e8+oh04Q//eO3t6etvFXgayz2fClyFQb5w=="],
 

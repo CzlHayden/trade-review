@@ -11,8 +11,9 @@ import type {
   Trade,
 } from "../../src/domain/types";
 import type { Journal, WeeklyEntry, WatchlistItem } from "../../src/domain/journal-types";
+import type { Drawing } from "../../src/store/drawings";
 
-export type { Breakdown, Candle, Flag, Stats, Trade, StopInfo, RawFill, RawOrder, Journal, WeeklyEntry, WatchlistItem };
+export type { Breakdown, Candle, Flag, Stats, Trade, StopInfo, RawFill, RawOrder, Journal, WeeklyEntry, WatchlistItem, Drawing };
 
 /** A trade row from GET /api/trades — base Trade plus embedded journal/flags for the list. */
 export interface TradeRow extends Trade {
@@ -95,14 +96,19 @@ export const api = {
   breakdowns: (by: string) => get<Breakdown[]>(`/api/breakdowns?by=${by}`),
   trades: () => get<TradeRow[]>("/api/trades"),
   trade: (id: string) => get<TradeDetail>(`/api/trades/${encodeURIComponent(id)}`),
-  candles: (id: string, res: "day" | "hour") =>
-    get<Candle[]>(`/api/trades/${encodeURIComponent(id)}/candles?res=${res}`),
+  candles: (id: string, res: "1d" | "1h" | "15m" = "1d") =>
+    get<{ res: "1d" | "1h" | "15m"; resMs: number; focusFrom: number; focusTo: number; candles: Candle[] }>(
+      `/api/trades/${encodeURIComponent(id)}/candles?res=${res}`,
+    ),
   positions: () => get<PositionsResponse>("/api/positions"),
   meta: () => get<Meta>("/api/meta"),
   syncStatus: () => get<SyncStatus>("/api/sync/status"),
   startSync: () => send<SyncStatus>("/api/sync", "POST"),
   putJournal: (id: string, body: Record<string, unknown>) =>
     send<TradeDetail>(`/api/trades/${encodeURIComponent(id)}/journal`, "PUT", body),
+  drawings: (id: string) => get<{ drawings: Drawing[] }>(`/api/trades/${encodeURIComponent(id)}/drawings`),
+  putDrawings: (id: string, drawings: Drawing[]) =>
+    send<{ drawings: Drawing[] }>(`/api/trades/${encodeURIComponent(id)}/drawings`, "PUT", { drawings }),
   week: (isoWeek: string) => get<WeeklyView>(`/api/journal/weeks/${isoWeek}`),
   putWeek: (isoWeek: string, body: Record<string, unknown>) =>
     send<WeeklyView>(`/api/journal/weeks/${isoWeek}`, "PUT", body),

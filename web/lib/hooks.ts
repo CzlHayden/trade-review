@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { api } from "./api";
+import { api, type Drawing } from "./api";
 
 export const useStats = () => useQuery({ queryKey: ["stats"], queryFn: api.stats });
 export const useTrades = () => useQuery({ queryKey: ["trades"], queryFn: api.trades });
@@ -11,8 +11,28 @@ export const useBreakdowns = (by: string) =>
 export const useTradeDetail = (id: string) =>
   useQuery({ queryKey: ["trade", id], queryFn: () => api.trade(id), enabled: !!id });
 
-export const useCandles = (id: string, res: "day" | "hour") =>
-  useQuery({ queryKey: ["candles", id, res], queryFn: () => api.candles(id, res), enabled: !!id });
+export const useCandles = (id: string, res: "1d" | "1h" | "15m" = "1d") =>
+  useQuery({
+    queryKey: ["candles", id, res],
+    queryFn: () => api.candles(id, res),
+    enabled: !!id,
+    placeholderData: keepPreviousData, // don't blank the chart while a resolution switch refetches
+  });
+
+export const useDrawings = (id: string) =>
+  useQuery({ queryKey: ["drawings", id], queryFn: () => api.drawings(id), enabled: !!id });
+
+/** Save a trade's chart drawings. Not derived data, so no cascade to trades/stats/breakdowns.
+ * Write the saved set straight into the cache (setQueryData) rather than invalidating: a refetch
+ * would land the server snapshot AFTER the user may have drawn more, and rehydrating from it could
+ * drop that newer annotation. This also keeps the cache correct for a quick remount within staleTime. */
+export function usePutDrawings(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (drawings: Drawing[]) => api.putDrawings(id, drawings),
+    onSuccess: (data) => qc.setQueryData(["drawings", id], data),
+  });
+}
 
 /** Save a trade's journal. A manual-stop/setup/tags change re-derives on the server, so invalidate
  * everything that depends on derived data (this trade + all list/stat/breakdown queries). */

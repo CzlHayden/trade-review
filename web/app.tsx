@@ -28,7 +28,9 @@ export function App() {
         <Route path="/trades/:id">
           {(params) => (
             <Layout title="Trade detail">
-              <TradeDetail id={decodeURIComponent(params.id)} />
+              {/* key by id: remount on trade change so a pending debounced drawing-save (flushed on
+                  unmount) can never PUT one trade's drawings into another's row. */}
+              <TradeDetail key={params.id} id={decodeURIComponent(params.id)} />
             </Layout>
           )}
         </Route>
