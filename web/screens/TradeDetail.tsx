@@ -118,6 +118,9 @@ export function TradeDetail({ id }: { id: string }) {
               // R/risk is computed from the PLANNED stop (manual override, else the initial inferred
               // stop) — NOT the effective/trailing stop shown below. Surface both so R is reconcilable.
               const plannedStop = journal?.manualStop ?? stop.initialStop;
+              const profitSide =
+                plannedStop != null &&
+                (t.direction === "LONG" ? plannedStop > t.avgEntry : plannedStop < t.avgEntry);
               return (
                 <>
                   <div>
@@ -134,7 +137,9 @@ export function TradeDetail({ id }: { id: string }) {
                     )}
                     {plannedStop != null && t.risk === null && (
                       <div className="faint" style={{ marginTop: 2 }}>
-                        Risk not computed{!t.coverageOk ? " — seeded trade (cost basis predates coverage)" : " — stop is on the profit side of entry"}.
+                        {profitSide
+                          ? "Risk not computed — this stop is on the profit side of entry (e.g. a split-affected or un-adjusted price)."
+                          : "Risk not computed — seeded/corporate-action trade. Enter a Manual stop above to set the risk basis and get your R."}
                       </div>
                     )}
                   </div>

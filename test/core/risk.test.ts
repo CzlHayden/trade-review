@@ -39,11 +39,20 @@ test("zero risk (stop equals entry) → null R, not Infinity", () => {
   expect(r.rMultiple).toBeNull();
 });
 
-test("seeded trade (coverage predates data) → null risk and R even with a valid stop", () => {
+test("seeded trade (coverage predates data) → null risk and R for an INFERRED stop", () => {
   // Pre-existing 100 @ 10, sold 100 @ 12. coverageOk=false → cost basis unreliable.
   const seeded = buildTrades([fill("SELL", 100, 12)], [seedPos(100, 10)])[0]!;
   expect(seeded.coverageOk).toBe(false);
   expect(computeRisk(seeded, 9)).toEqual({ risk: null, rMultiple: null });
+});
+
+test("seeded trade WITH an explicit manual stop is honored (user's escape hatch)", () => {
+  const seeded = buildTrades([fill("SELL", 100, 12)], [seedPos(100, 10)])[0]!; // LONG, entry 10, pnl 200
+  const r = computeRisk(seeded, 9, { manual: true }); // loss-side manual stop → risk 100 → 2R
+  expect(r.risk).toBe(100);
+  expect(r.rMultiple).toBe(2);
+  // But a manual stop on the PROFIT side is still rejected (e.g. an un-split-adjusted number).
+  expect(computeRisk(seeded, 11, { manual: true })).toEqual({ risk: null, rMultiple: null });
 });
 
 test("LONG stop on the profit side (above entry) → null, no fabricated risk", () => {

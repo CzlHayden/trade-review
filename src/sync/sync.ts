@@ -267,7 +267,9 @@ export async function rebuildDerived(
     const ms = manual.get(t.id);
     const initialStop = ms ?? stop.initialStop; // initial = planned risk (spec §6)
     const effectiveStop = ms ?? stop.effectiveStop;
-    const { risk, rMultiple } = computeRisk(t, initialStop);
+    // A manual stop is the user asserting the risk basis explicitly — honor it even on a seeded /
+    // split-affected trade (their escape hatch when the tool can't reconstruct the original stop).
+    const { risk, rMultiple } = computeRisk(t, initialStop, { manual: ms != null });
 
     const resMs = resolutionMs(t);
     const from = t.openTime - PAD_MS;
