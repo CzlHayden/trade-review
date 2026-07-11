@@ -79,11 +79,21 @@ export function TradeDetail({ id }: { id: string }) {
     const cs = candles.data?.candles;
     return cs && cs.length > 0 ? cs[cs.length - 1]! : null;
   }, [candles.data?.candles]);
-  // Live R only for a genuinely-open, fully-covered position that we actually still hold per the snapshot.
-  // Seeded/corporate-action trades are excluded (they carry the "possible corporate action" caveat and no
-  // reliable risk basis); a zero snapshot holding means we're flat or the snapshot predates the position.
+  // The stop to reason about NOW: a manual stop (the user's asserted risk basis) if set, else the
+  // latest still-working protective order — never a cancelled/filled one, so we don't claim protection
+  // that's gone. `liveStop`/`liveStopQty` come from stop-inference; the risk basis (t.risk) is separate.
+  const manualStop = data?.journal?.manualStop ?? null;
+  const stopIsManual = manualStop !== null;
+  const liveStopPrice = stopIsManual ? manualStop : data?.stop?.liveStop ?? null;
+  const liveStopQty = stopIsManual ? null : data?.stop?.liveStopQty ?? null;
+  // Live R only for a genuinely-open, fully-covered position that we actually still hold per the snapshot,
+  // with the holding's sign matching the trade direction (guards a rare sync race where the position query
+  // caught a reversal the fills query hadn't). Seeded/corporate-action trades are excluded (they carry the
+  // "possible corporate action" caveat and no reliable risk basis).
+  const dirSign = t?.direction === "SHORT" ? -1 : 1;
   const live = useMemo(() => {
-    if (!t || t.status !== "open" || !t.coverageOk || !lastBar || currentQty === 0) return null;
+    if (!t || t.status !== "open" || !t.coverageOk || !lastBar) return null;
+    if (currentQty === 0 || Math.sign(currentQty) !== dirSign) return null;
     return activePosition({
       direction: t.direction,
       avgEntry: t.avgEntry,
@@ -91,9 +101,9 @@ export function TradeDetail({ id }: { id: string }) {
       currentPrice: lastBar.close,
       maxQty: t.maxQty,
       risk: t.risk,
-      effectiveStop: t.effectiveStop,
+      effectiveStop: liveStopPrice,
     });
-  }, [t, currentQty, lastBar]);
+  }, [t, currentQty, lastBar, liveStopPrice, dirSign]);
 
   if (isLoading) return <div className="spinner">Loading…</div>;
   if (!data || !t) return <div className="empty card">Trade not found.</div>;
@@ -144,20 +154,29 @@ export function TradeDetail({ id }: { id: string }) {
           <div className="kpi-row" style={{ marginTop: 0 }}>
             {stat("Open R (now)", rMultiple(live.openR), signClass(live.openR))}
             {stat("Unrealized P&L", money(live.openPnl, t.currency), signClass(live.openPnl))}
-            {stat("Stop (last active)", t.effectiveStop !== null ? price(t.effectiveStop, t.currency) : "—")}
+            {stat(
+              stopIsManual ? "Stop (manual)" : "Stop (working)",
+              liveStopPrice !== null ? price(liveStopPrice, t.currency) : "—",
+            )}
             {stat("Locked R", rMultiple(live.lockedR), signClass(live.lockedR))}
           </div>
-          {stop.stopQty !== null && stop.stopQty + 1e-9 < Math.abs(currentQty) && (
+          {!stopIsManual && liveStopPrice === null && (
+            <div className="neg" style={{ fontSize: 12, marginTop: 6, fontWeight: 600 }}>
+              No working stop at last sync — this position is unprotected.
+            </div>
+          )}
+          {liveStopQty !== null && liveStopQty + 1e-9 < Math.abs(currentQty) && (
             <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>
-              Heads up: the last stop covers {qty(stop.stopQty)} of {qty(Math.abs(currentQty))} shares — the rest is
+              Heads up: the working stop covers {qty(liveStopQty)} of {qty(Math.abs(currentQty))} shares — the rest is
               unprotected.
             </div>
           )}
           <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>
-            Open R is your unrealized P&L (gross of fees) on the shares held now, in R. Locked R is where your stop
-            sits, in R off entry: <span className="mono">0R</span> = breakeven (no risk left),{" "}
-            <span className="mono">+1R</span> = a full R secured, <span className="mono">−1R</span> = the initial risk
-            still fully on. Holding &amp; stop are as of the last sync; the mark is the latest candle close.
+            Open R is your unrealized P&L (gross of fees) on the shares held now, in R. Locked R is where your{" "}
+            {stopIsManual ? "manual" : "working"} stop sits, in R off entry: <span className="mono">0R</span> ={" "}
+            breakeven (no risk left), <span className="mono">+1R</span> = a full R secured,{" "}
+            <span className="mono">−1R</span> = the initial risk still fully on. Holding &amp; stop are as of the last
+            sync; the mark is the latest candle close.
           </div>
         </div>
       )}

@@ -124,6 +124,12 @@ export interface StopInfo {
   stopOrderId: string | null; // id of the order behind effectiveStop (provenance)
   stopQty: number | null; // qty that stop covered (may be < position size)
   receipt: string | null; // plain-English explanation of the matched stop (spec §6)
+  // The latest protective stop that is STILL WORKING (resting in the book) as of the data we have —
+  // distinct from effectiveStop, which is the latest protective stop ever seen (it may since have been
+  // cancelled or filled). Use liveStop for a LIVE open-position readout so a cancelled stop is never
+  // shown as active protection; use effectiveStop for post-hoc review of what protected the trade.
+  liveStop: number | null;
+  liveStopQty: number | null;
 }
 
 /** A fired mistake-rule result, with a plain-English reason. */

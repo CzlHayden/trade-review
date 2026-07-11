@@ -131,5 +131,41 @@ test("no orders → all-null StopInfo", () => {
     stopOrderId: null,
     stopQty: null,
     receipt: null,
+    liveStop: null,
+    liveStopQty: null,
   });
+});
+
+test("liveStop is the newest WORKING stop; a cancelled newest stop falls back to the older working one", () => {
+  const t = longTrade();
+  const orders = [
+    order("SELL", "STOP", 100, { triggerPrice: 9, createTime: 120_000, status: "SUBMITTED" }),
+    // A newer stop the user placed then cancelled — it's the effective (last-seen) stop but not live.
+    order("SELL", "STOP", 100, { triggerPrice: 9.5, createTime: 180_000, status: "CANCELLED_ALL" }),
+  ];
+  const s = inferStops(t, orders);
+  expect(s.effectiveStop).toBe(9.5); // last-seen protective stop (post-hoc)
+  expect(s.liveStop).toBe(9); // the still-working one
+});
+
+test("liveStop is null when the only protective stop has been cancelled (position unprotected)", () => {
+  const t = longTrade();
+  const orders = [
+    order("SELL", "STOP", 100, { triggerPrice: 9, createTime: 120_000, status: "CANCELLED_ALL" }),
+  ];
+  const s = inferStops(t, orders);
+  expect(s.effectiveStop).toBe(9); // still reported for post-hoc review
+  expect(s.liveStop).toBeNull(); // but nothing is working now
+});
+
+test("a fully-filled stop is not live; a partially-filled stop still is", () => {
+  const t = longTrade();
+  expect(
+    inferStops(t, [order("SELL", "STOP", 100, { triggerPrice: 9, status: "FILLED_ALL" })]).liveStop,
+  ).toBeNull();
+  const part = inferStops(t, [
+    order("SELL", "STOP", 100, { triggerPrice: 9, status: "FILLED_PART" }),
+  ]);
+  expect(part.liveStop).toBe(9);
+  expect(part.liveStopQty).toBe(100);
 });
