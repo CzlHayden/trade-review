@@ -5,7 +5,9 @@ import type { Candle } from "../domain/types";
 const TAIL_MS = 2 * 86_400_000; // last ~2 days may be partial/backfilled → refetch
 
 export interface CacheOpts {
-  now: number;
+  /** Current epoch ms. Pass a FUNCTION in a long-lived server so `nearNow`/coverage stay live across
+   * syncs; a fixed number is fine for one-shot/tests. */
+  now: number | (() => number);
 }
 
 function readBars(db: Database, symbol: string, resMs: number, from: number, to: number): Candle[] {
@@ -91,8 +93,9 @@ function addCoverage(db: Database, symbol: string, resMs: number, from: number, 
 export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpts): CandleSource {
   return {
     async getCandles(symbol, fromMs, toMs, resMs) {
+      const now = typeof opts.now === "function" ? opts.now() : opts.now;
       const covered = isCovered(intervals(db, symbol, resMs), fromMs, toMs);
-      const nearNow = toMs >= opts.now - TAIL_MS;
+      const nearNow = toMs >= now - TAIL_MS;
       if (covered && !nearNow) return readBars(db, symbol, resMs, fromMs, toMs);
 
       let fresh: Candle[] = [];
@@ -107,8 +110,8 @@ export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpt
         // current bar; marking [from,to] fully covered would later (once now advances past the tail)
         // serve that stale partial bar without refetching. Capping coverage at now−TAIL forces the
         // tail to refetch until its bars close. The just-fetched bars are still returned to this caller.
-        const coverEnd = Math.min(toMs, opts.now - TAIL_MS);
-        if (coverEnd > fromMs) addCoverage(db, symbol, resMs, fromMs, coverEnd, opts.now);
+        const coverEnd = Math.min(toMs, now - TAIL_MS);
+        if (coverEnd > fromMs) addCoverage(db, symbol, resMs, fromMs, coverEnd, now);
         return readBars(db, symbol, resMs, fromMs, toMs);
       }
       // Empty fresh response — the live source degrades fetch/parse failures to [] (it doesn't throw),

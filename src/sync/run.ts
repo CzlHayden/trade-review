@@ -25,7 +25,7 @@ async function main() {
   const port = Number(process.env.OPEND_PORT ?? 33334);
   console.log(`Connecting to OpenD ws://127.0.0.1:${port}${key ? " (auth key set)" : ""}…`);
   const client = await connectFutu({ port, key });
-  const candles = cachedCandles(db, yahooCandles, { now: Date.now() });
+  const candles = cachedCandles(db, yahooCandles, { now: Date.now });
   try {
     const res = await runSync({ db, client, candles, config, now: Date.now() });
     console.log("Sync complete:", JSON.stringify(res));

@@ -33,6 +33,10 @@ export interface SyncDeps {
   config: RuleConfig;
   now: number; // injected epoch ms (deterministic in tests)
   historyDays?: number; // first-sync lookback window (default 90)
+  // Optional serializer wrapped around ONLY the derived rebuild (not the network pull), so a
+  // long-lived server can share one lock between sync + journal-edit rebuilds without blocking
+  // journal edits behind slow OpenD I/O. Defaults to running the rebuild directly.
+  rebuildGuard?: <T>(fn: () => Promise<T>) => Promise<T>;
 }
 
 export interface SyncResult {
@@ -264,7 +268,8 @@ export async function rebuildDerived(
 export async function runSync(deps: SyncDeps): Promise<SyncResult> {
   const { db, client, candles, config, now } = deps;
   const { accounts } = await pullRaw(db, client, { now, historyDays: deps.historyDays });
-  await rebuildDerived(db, { candles, config, now });
+  const guard = deps.rebuildGuard ?? ((fn) => fn());
+  await guard(() => rebuildDerived(db, { candles, config, now }));
 
   const trades = allTrades(db);
   let flagCount = 0;

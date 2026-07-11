@@ -40,22 +40,30 @@ export function main(): void {
   const db = openDb(path);
   runMigrations(db);
   const config = getRuleConfig(db);
-  const candles = cachedCandles(db, yahooCandles, { now: Date.now() });
+  const candles = cachedCandles(db, yahooCandles, { now: Date.now }); // live clock (long-lived server)
 
   // Shared by the sync job and journal-triggered rebuilds so the two rebuilds never interleave.
   const rebuildLock = new Mutex();
-  // The sync job holds the OpenD socket only for its own duration (connect→pull→rebuild→close).
-  const syncJob = (): Promise<SyncResult> =>
-    rebuildLock.runExclusive(async () => {
-      const key = process.env.OPEND_WS_KEY || undefined;
-      const port = Number(process.env.OPEND_PORT ?? 33334);
-      const client = await connectFutu({ port, key });
-      try {
-        return await runSync({ db, client, candles, config, now: Date.now() });
-      } finally {
-        client.close();
-      }
-    });
+  // The sync job holds the OpenD socket only for its own duration. Only the derived rebuild is
+  // serialized (rebuildGuard) — the network pull runs unlocked, so a journal edit never blocks
+  // behind slow/unreachable OpenD.
+  const syncJob = async (): Promise<SyncResult> => {
+    const key = process.env.OPEND_WS_KEY || undefined;
+    const port = Number(process.env.OPEND_PORT ?? 33334);
+    const client = await connectFutu({ port, key });
+    try {
+      return await runSync({
+        db,
+        client,
+        candles,
+        config,
+        now: Date.now(),
+        rebuildGuard: (fn) => rebuildLock.runExclusive(fn),
+      });
+    } finally {
+      client.close();
+    }
+  };
   const sync = new SyncRunner(db, syncJob, Date.now);
   const api = buildApi(db, { candles, config, sync, now: Date.now, rebuildLock });
 
