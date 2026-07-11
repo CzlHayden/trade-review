@@ -12,9 +12,14 @@ const CCY_SYMBOL: Record<string, string> = {
   MYR: "RM",
 };
 
+/** Symbol for a currency, or the bare code (e.g. "USDT ") so crypto/unknown currencies stay labelled. */
+function ccySym(currency: string): string {
+  return CCY_SYMBOL[currency] ?? (currency ? `${currency} ` : "");
+}
+
 /** Signed money in a single currency, e.g. +$1,234.50 / −$88.99. Currency is shown, never converted. */
 export function money(value: number, currency: string): string {
-  const sym = CCY_SYMBOL[currency] ?? "";
+  const sym = ccySym(currency);
   const sign = value < 0 ? "−" : value > 0 ? "+" : "";
   const abs = Math.abs(value).toLocaleString("en-US", {
     minimumFractionDigits: 2,
@@ -25,7 +30,7 @@ export function money(value: number, currency: string): string {
 
 /** Unsigned money (prices, costs) — no leading + / −. */
 export function price(value: number, currency = ""): string {
-  const sym = CCY_SYMBOL[currency] ?? "";
+  const sym = ccySym(currency);
   return `${sym}${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 

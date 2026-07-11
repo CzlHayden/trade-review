@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "wouter";
 import { useWeek, usePutWeek } from "../lib/hooks";
 import { isoWeekKey, weekLabel } from "../lib/week";
@@ -42,8 +42,12 @@ function WeekBody({ isoWeek }: { isoWeek: string }) {
   const [tradedVsPlan, setTradedVsPlan] = useState("");
   const [watch, setWatch] = useState<WatchRow[]>([]);
 
+  // Seed the form from server state ONCE per mounted week (WeekBody remounts via key={key} on week change).
+  // Re-seeding on every `data` change would clobber unsaved typing when a background sync refetches ["week"].
+  const seeded = useRef(false);
   useEffect(() => {
-    if (!data) return;
+    if (!data || seeded.current) return;
+    seeded.current = true;
     setMarketRead(data.marketRead ?? "");
     setTradedVsPlan(data.tradedVsPlan ?? "");
     setWatch((data.watchlist ?? []).map((w) => ({ symbol: w.symbol, note: w.note ?? "", keyLevel: w.keyLevel != null ? String(w.keyLevel) : "" })));
@@ -66,6 +70,10 @@ function WeekBody({ isoWeek }: { isoWeek: string }) {
 
   const setRow = (i: number, patch: Partial<WatchRow>) =>
     setWatch((ws) => ws.map((w, j) => (j === i ? { ...w, ...patch } : w)));
+
+  // A non-empty, non-finite key level would be silently dropped to null on save — block instead.
+  const levelBad = (w: WatchRow) => w.keyLevel.trim() !== "" && !Number.isFinite(Number(w.keyLevel.trim()));
+  const watchInvalid = watch.some(levelBad);
 
   return (
     <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)", alignItems: "start" }}>
@@ -94,7 +102,7 @@ function WeekBody({ isoWeek }: { isoWeek: string }) {
                   onChange={(e) => setRow(i, { symbol: e.target.value })} />
                 <input className="input" style={{ minWidth: 0, flex: 1 }} placeholder="note" value={w.note}
                   onChange={(e) => setRow(i, { note: e.target.value })} />
-                <input className="input" style={{ minWidth: 0, flex: "0 0 90px" }} placeholder="level" inputMode="decimal"
+                <input className="input" style={{ minWidth: 0, flex: "0 0 90px", borderColor: levelBad(w) ? "var(--neg)" : undefined }} placeholder="level" inputMode="decimal"
                   value={w.keyLevel} onChange={(e) => setRow(i, { keyLevel: e.target.value })} />
                 <button className="btn btn-icon" onClick={() => setWatch((ws) => ws.filter((_, j) => j !== i))}>
                   ✕
@@ -105,11 +113,12 @@ function WeekBody({ isoWeek }: { isoWeek: string }) {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button className="btn btn-primary" disabled={save.isPending} onClick={submit}>
+          <button className="btn btn-primary" disabled={save.isPending || watchInvalid} onClick={submit}>
             {save.isPending ? "Saving…" : "Save week"}
           </button>
           {save.isSuccess && !save.isPending && <span className="pos" style={{ fontSize: 12 }}>Saved ✓</span>}
           {save.isError && <span className="neg" style={{ fontSize: 12 }}>Save failed</span>}
+          {watchInvalid && <span className="neg" style={{ fontSize: 12 }}>Key level must be a number</span>}
         </div>
       </div>
 

@@ -13,8 +13,11 @@ const DIMS = [
 export function BreakdownTable() {
   const [by, setBy] = useState("setup");
   const { data, isLoading } = useBreakdowns(by);
-  const rows = (data ?? []).slice().sort((a, b) => b.netPnl - a.netPnl);
-  const maxAbs = Math.max(1, ...rows.map((r) => Math.abs(r.netPnl)));
+  // Group by currency, then rank by net P&L within each currency — never compare magnitudes across currencies.
+  const rows = (data ?? []).slice().sort((a, b) => (a.currency < b.currency ? -1 : a.currency > b.currency ? 1 : b.netPnl - a.netPnl));
+  // Bar width normalizes within a currency only: a HKD row must not be scaled against a USD peak.
+  const maxAbsByCcy = new Map<string, number>();
+  for (const r of rows) maxAbsByCcy.set(r.currency, Math.max(maxAbsByCcy.get(r.currency) ?? 1, Math.abs(r.netPnl)));
 
   return (
     <div>
@@ -70,7 +73,7 @@ export function BreakdownTable() {
                   <div className="bar">
                     <span
                       style={{
-                        width: `${(Math.abs(r.netPnl) / maxAbs) * 100}%`,
+                        width: `${(Math.abs(r.netPnl) / (maxAbsByCcy.get(r.currency) ?? 1)) * 100}%`,
                         background: r.netPnl >= 0 ? "var(--pos)" : "var(--neg)",
                       }}
                     />

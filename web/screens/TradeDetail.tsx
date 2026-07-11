@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useTradeDetail, useCandles, useMeta, useTheme } from "../lib/hooks";
 import { money, price, rMultiple, signClass, date, dateTime, holdTime, qty } from "../lib/format";
 import { FlagChips } from "../components/FlagChips";
@@ -12,6 +12,12 @@ export function TradeDetail({ id }: { id: string }) {
   const t = data?.trade;
   const res: "day" | "hour" = t && t.holdSeconds !== null && t.holdSeconds < 2 * 86400 ? "hour" : "day";
   const candles = useCandles(id, res);
+  // Stable marks identity so background refetches don't rerun the chart effect (which calls fitContent
+  // and would reset the user's zoom/pan). Keyed on the primitive fields the chart actually draws.
+  const marks = useMemo(
+    () => ({ avgEntry: t?.avgEntry ?? 0, effectiveStop: t?.effectiveStop ?? null, effectiveTp: t?.effectiveTp ?? null, direction: t?.direction ?? "LONG" }),
+    [t?.avgEntry, t?.effectiveStop, t?.effectiveTp, t?.direction],
+  );
 
   if (isLoading) return <div className="spinner">Loading…</div>;
   if (!data || !t) return <div className="empty card">Trade not found.</div>;
@@ -44,7 +50,7 @@ export function TradeDetail({ id }: { id: string }) {
       <TradeChart
         candles={candles.data ?? []}
         fills={fills}
-        marks={{ avgEntry: t.avgEntry, effectiveStop: t.effectiveStop, effectiveTp: t.effectiveTp, direction: t.direction }}
+        marks={marks}
         themeKey={themeKey}
       />
 

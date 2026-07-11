@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { money, pct, rMultiple, signClass, holdTime, humanizeRule } from "../../web/lib/format";
+import { money, price, pct, rMultiple, signClass, holdTime, humanizeRule } from "../../web/lib/format";
 
 test("money shows sign + currency symbol, never converts", () => {
   expect(money(1234.5, "USD")).toBe("+$1,234.50");
@@ -7,6 +7,12 @@ test("money shows sign + currency symbol, never converts", () => {
   expect(money(0, "USD")).toBe("$0.00");
   expect(money(100, "HKD")).toBe("+HK$100.00");
   expect(money(50, "CNH")).toBe("+¥50.00");
+});
+
+test("unknown/crypto currency falls back to the code, never a bare number", () => {
+  expect(money(123.45, "USDT")).toBe("+USDT 123.45");
+  expect(price(1.5, "USDT")).toBe("USDT 1.50");
+  expect(price(1.5)).toBe("1.50"); // empty currency stays bare (used where currency is implicit)
 });
 
 test("pct and rMultiple", () => {
