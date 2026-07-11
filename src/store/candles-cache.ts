@@ -79,8 +79,12 @@ export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpt
            ON CONFLICT(symbol,res_ms) DO UPDATE SET from_ms=excluded.from_ms, to_ms=excluded.to_ms, fetched_at=excluded.fetched_at`,
           [symbol, resMs, newFrom, newTo, opts.now],
         );
+        return readBars(db, symbol, resMs, fromMs, toMs);
       }
-      return readBars(db, symbol, resMs, fromMs, toMs);
+      // Empty fresh response — the live source degrades fetch/parse failures to [] (it doesn't throw),
+      // so this is the same hazard as the catch path: serve cache ONLY if it fully covers the request,
+      // else degrade to no bars rather than leaking a partial (wrong) excursion window.
+      return covered ? readBars(db, symbol, resMs, fromMs, toMs) : [];
     },
   };
 }

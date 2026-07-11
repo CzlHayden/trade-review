@@ -45,6 +45,12 @@ test("latestSnapshotTime prefers the marker, backfilling from stored snapshots w
     { account: "a", symbol: "US.AAPL", qty: 1, avgCost: 1, currency: "USD", time: 4000 },
   ]);
   expect(latestSnapshotTime(d)).toBe(4000);
+  // A migrated DB whose LAST sync was all-flat wrote no raw_positions row for that batch — prefer the
+  // sync clock (sync_state) so we don't resurrect the older non-empty snapshot at t=4000.
+  d.run(
+    `INSERT INTO sync_state (account, market, last_synced_time, coverage_start) VALUES ('a','US',7000,0)`,
+  );
+  expect(latestSnapshotTime(d)).toBe(7000);
   // Once a sync writes the marker, it wins (so an all-flat sync can report zero holdings).
   setConfigValue(d, LAST_SNAPSHOT_TIME, "9000");
   expect(latestSnapshotTime(d)).toBe(9000);

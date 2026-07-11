@@ -99,3 +99,15 @@ test("source failure on a NOT-fully-covered range degrades to [] (no partial-win
   const out = await cachedCandles(d, bad, { now }).getCandles("US.AAPL", 1 * DAY, 50 * DAY, DAY);
   expect(out).toEqual([]);
 });
+
+test("a SILENTLY-EMPTY source (returns [] not throws) on a partial range also degrades to []", async () => {
+  const d = db();
+  const now = 100 * DAY;
+  const good = { getCandles: async (_s: string, from: number) => bars([from, from + DAY]) };
+  await cachedCandles(d, good, { now }).getCandles("US.AAPL", 1 * DAY, 3 * DAY, DAY); // covers [1,3]d
+  // yahooCandles returns [] on failure rather than throwing — the empty-fetch path must behave like
+  // the catch path: no partial cache leak for a not-fully-covered range.
+  const empty = { getCandles: async () => [] };
+  const out = await cachedCandles(d, empty, { now }).getCandles("US.AAPL", 1 * DAY, 50 * DAY, DAY);
+  expect(out).toEqual([]);
+});
