@@ -218,16 +218,35 @@ export function TradeDetail({ id }: { id: string }) {
         {stat("R-multiple", rMultiple(t.rMultiple), signClass(t.rMultiple))}
         {stat(
           "Planned risk",
-          <>
-            {t.risk !== null ? price(t.risk, t.currency) : "—"}
-            {data.riskPct !== null && (
+          data.riskPct !== null ? (
+            <>
+              {data.equityBasis === "latest" ? "≈" : ""}
+              {pct(data.riskPct)}
               <span className="faint" style={{ fontSize: 12 }}>
-                {" · "}
-                {data.equityBasis === "latest" ? "≈" : ""}
-                {pct(data.riskPct)} of acct
+                {" of acct"}
+                {t.risk !== null ? ` · ${price(t.risk, t.currency)}` : ""}
               </span>
-            )}
-          </>,
+            </>
+          ) : t.risk !== null ? (
+            price(t.risk, t.currency)
+          ) : (
+            "—"
+          ),
+        )}
+        {stat(
+          "Position size",
+          data.sizePct !== null ? (
+            <>
+              {data.equityBasis === "latest" ? "≈" : ""}
+              {pct(data.sizePct)}
+              <span className="faint" style={{ fontSize: 12 }}>
+                {" of acct · "}
+                {price(data.positionSize, t.currency)}
+              </span>
+            </>
+          ) : (
+            price(data.positionSize, t.currency)
+          ),
         )}
         {stat("Avg entry / exit", `${price(t.avgEntry, t.currency)} / ${t.avgExit !== null ? price(t.avgExit, t.currency) : "—"}`)}
         {stat("Max size", qty(t.maxQty))}
@@ -242,7 +261,15 @@ export function TradeDetail({ id }: { id: string }) {
           <div className="section-title" style={{ marginTop: 0 }}>
             Journal
           </div>
-          <JournalEditor key={id} tradeId={id} journal={journal} setups={meta.data?.setups ?? []} currency={t.currency} />
+          <JournalEditor
+            key={id}
+            tradeId={id}
+            journal={journal}
+            setups={meta.data?.setups ?? []}
+            emotions={meta.data?.emotions ?? []}
+            allTags={meta.data?.tags ?? []}
+            currency={t.currency}
+          />
         </div>
 
         <div>

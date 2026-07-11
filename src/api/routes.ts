@@ -17,6 +17,7 @@ import {
   upsertWeeklyEntry,
 } from "../store/journal";
 import { getDrawings, upsertDrawings, type Drawing } from "../store/drawings";
+import { equityAsOf, latestEquityByCurrency } from "../store/funds";
 import { rebuildDerived } from "../sync/sync";
 import {
   latestSnapshotTime,
@@ -183,7 +184,22 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
 
       // GET /api/stats
       if (seg.length === 2 && seg[1] === "stats" && method === "GET") {
-        return json(computeStats(allTrades(db)));
+        // Equity to size each trade's risk/notional against: the snapshot at its open (same currency),
+        // falling back to the latest snapshot for trades that predate funds capture. Same at_open/latest
+        // basis as the per-trade detail view. latest-per-account is memoized so this stays one pass.
+        const latestCache = new Map<string, Map<string, number>>();
+        const equityFor = (t: Trade) => {
+          const atOpen = equityAsOf(db, t.account, t.currency, t.openTime);
+          if (atOpen !== null) return { equity: atOpen, approx: false };
+          let m = latestCache.get(t.account);
+          if (!m) {
+            m = latestEquityByCurrency(db, t.account);
+            latestCache.set(t.account, m);
+          }
+          const latest = m.get(t.currency) ?? null;
+          return { equity: latest, approx: latest !== null }; // latest-equity fallback → approximate
+        };
+        return json(computeStats(allTrades(db), equityFor));
       }
       // GET /api/breakdowns?by=setup|tag|symbol|holdBucket
       if (seg.length === 2 && seg[1] === "breakdowns" && method === "GET") {

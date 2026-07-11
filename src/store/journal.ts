@@ -78,6 +78,14 @@ export function distinctTags(db: Database): string[] {
   );
 }
 
+export function distinctEmotions(db: Database): string[] {
+  return (
+    db
+      .query(`SELECT DISTINCT emotion FROM journal WHERE emotion IS NOT NULL AND emotion <> '' ORDER BY emotion ASC`)
+      .all() as any[]
+  ).map((r) => r.emotion as string);
+}
+
 // ---- weekly entry + watchlist -------------------------------------------------
 
 export function getWeeklyEntry(db: Database, id: string): WeeklyEntry | null {

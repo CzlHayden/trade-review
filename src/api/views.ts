@@ -13,7 +13,7 @@ import {
   positionsAt,
   snapshotClock,
 } from "../store/repos";
-import { distinctSetups, distinctTags, getJournal } from "../store/journal";
+import { distinctEmotions, distinctSetups, distinctTags, getJournal } from "../store/journal";
 import { equityAsOf, latestEquityByCurrency } from "../store/funds";
 import pkg from "../../package.json";
 
@@ -25,6 +25,7 @@ export interface OpenPosition {
   avgCost: number;
   effectiveStop: number | null;
   openRisk: number | null; // |avgCost − stop| × |qty|, or null when no stop is known
+  tradeId: string | null; // the open trade this holding belongs to → deep-link to its detail page
 }
 
 /** Current holdings from the snapshot at `snapshotTime`, joined to the open trade's effective stop
@@ -32,8 +33,12 @@ export interface OpenPosition {
 export function openPositions(db: Database, snapshotTime: number): OpenPosition[] {
   const snap = positionsAt(db, snapshotTime);
   const stopBy = new Map<string, number | null>();
+  const tradeIdBy = new Map<string, string>();
   for (const t of allTrades(db)) {
-    if (t.status === "open") stopBy.set(`${t.account}|${t.symbol}`, t.effectiveStop);
+    if (t.status === "open") {
+      stopBy.set(`${t.account}|${t.symbol}`, t.effectiveStop);
+      tradeIdBy.set(`${t.account}|${t.symbol}`, t.id);
+    }
   }
   return snap.map((p) => {
     const effectiveStop = stopBy.get(`${p.account}|${p.symbol}`) ?? null;
@@ -47,6 +52,7 @@ export function openPositions(db: Database, snapshotTime: number): OpenPosition[
       avgCost: p.avgCost,
       effectiveStop,
       openRisk,
+      tradeId: tradeIdBy.get(`${p.account}|${p.symbol}`) ?? null,
     };
   });
 }
@@ -74,6 +80,10 @@ export interface TradeDetail {
   riskPct: number | null;
   accountEquity: number | null; // equity used as the denominator, in the trade's currency
   equityBasis: "at_open" | "latest" | "none";
+  // Capital committed at max size (avgEntry × maxQty), in the trade's currency, and as a fraction of
+  // account equity (same `equityBasis` as riskPct) — "this trade was N% of the account".
+  positionSize: number;
+  sizePct: number | null;
   // Current signed holding for an OPEN trade, from the latest positions snapshot (FUTU's own ground
   // truth) — reversal-safe, unlike summing this trade's fills (a flip-through-zero fill is split across
   // two trades but returned at full qty). 0 when flat / no snapshot. `positionAsOf` is that snapshot's
@@ -96,6 +106,8 @@ export function tradeDetail(db: Database, id: string): TradeDetail | null {
   const equityBasis = atOpen !== null ? "at_open" : latest !== null ? "latest" : "none";
   const riskPct =
     trade.risk !== null && equity !== null && equity > 0 ? trade.risk / equity : null;
+  const positionSize = trade.avgEntry * trade.maxQty;
+  const sizePct = equity !== null && equity > 0 ? positionSize / equity : null;
   // Current holding from the latest snapshot (only meaningful while open; a closed trade is flat).
   const positionAsOf = latestSnapshotTime(db);
   const held =
@@ -114,6 +126,8 @@ export function tradeDetail(db: Database, id: string): TradeDetail | null {
     riskPct,
     accountEquity: equity,
     equityBasis,
+    positionSize,
+    sizePct,
     currentQty: held?.qty ?? 0,
     positionAsOf,
   };
@@ -125,8 +139,10 @@ export interface CurrencyPositions {
   currency: string;
   positions: OpenPosition[];
   totalOpenRisk: number | null; // sum of openRisk over rows that have one (null when none do)
+  deployed: number; // capital deployed = Σ |qty| × avgCost across this currency's holdings
   equity: number | null; // latest equity snapshot in this currency
   riskPct: number | null; // totalOpenRisk / equity
+  deployedPct: number | null; // deployed / equity — how much of the account is committed
 }
 
 export function openPositionsByCurrency(db: Database, snapshotTime: number): { byCurrency: CurrencyPositions[] } {
@@ -144,15 +160,24 @@ export function openPositionsByCurrency(db: Database, snapshotTime: number): { b
     .map(([currency, ps]) => {
       const risks = ps.map((p) => p.openRisk).filter((r): r is number => r !== null);
       const totalOpenRisk = risks.length ? risks.reduce((a, b) => a + b, 0) : null;
+      // Deployed capital: sum notional (|qty| × avgCost) — same currency only, an exposure sum (not P&L).
+      const deployed = ps.reduce((a, p) => a + Math.abs(p.qty) * p.avgCost, 0);
       // Sum equity for this currency across the DISTINCT accounts holding it (each account's own
-      // snapshot counted once, even if it has several positions in this currency).
-      let equity: number | null = null;
+      // snapshot counted once). If ANY contributing account lacks an equity snapshot the denominator is
+      // incomplete — leave equity null (→ % null, shown as "equity n/a") rather than dividing this
+      // currency's full deployed/risk by a partial equity, which would overstate exposure.
+      let equity: number | null = 0;
       for (const account of new Set(ps.map((p) => p.account))) {
         const e = equityByCcy.get(account)?.get(currency);
-        if (e !== undefined) equity = (equity ?? 0) + e;
+        if (e === undefined) {
+          equity = null;
+          break;
+        }
+        equity += e;
       }
       const riskPct = totalOpenRisk !== null && equity !== null && equity > 0 ? totalOpenRisk / equity : null;
-      return { currency, positions: ps, totalOpenRisk, equity, riskPct };
+      const deployedPct = equity !== null && equity > 0 ? deployed / equity : null;
+      return { currency, positions: ps, totalOpenRisk, deployed, equity, riskPct, deployedPct };
     });
   return { byCurrency };
 }
@@ -162,6 +187,7 @@ export interface Meta {
   currencies: string[];
   setups: string[];
   tags: string[];
+  emotions: string[];
   coverageStart: number | null;
   appVersion: string;
 }
@@ -183,6 +209,7 @@ export function metaView(db: Database): Meta {
     currencies,
     setups: distinctSetups(db),
     tags: distinctTags(db),
+    emotions: distinctEmotions(db),
     coverageStart: cov?.c ?? null,
     appVersion: (pkg as { version?: string }).version ?? "0.0.0",
   };

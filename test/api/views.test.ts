@@ -54,6 +54,29 @@ test("openPositionsByCurrency totals open risk and computes risk % of latest equ
   expect(byCurrency[0]!.totalOpenRisk).toBeCloseTo(50); // (100-95)*10
   expect(byCurrency[0]!.equity).toBe(10_000);
   expect(byCurrency[0]!.riskPct).toBeCloseTo(0.005); // 50 / 10000
+  expect(byCurrency[0]!.deployed).toBeCloseTo(1000); // 10 × 100 avg cost
+  expect(byCurrency[0]!.deployedPct).toBeCloseTo(0.1); // 1000 / 10000 = 10% of equity
+});
+
+test("openPositionsByCurrency leaves % null when a contributing account lacks equity (no partial denominator)", () => {
+  const d = db();
+  d.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop)
+     VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95),
+            ('t2','b','US.MSFT','USD','LONG','open', 1000, 200, 5, 0, 1, 190)`,
+  );
+  insertPositionSnapshot(d, [
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, currency: "USD", time: 5000 },
+    { account: "b", symbol: "US.MSFT", qty: 5, avgCost: 200, currency: "USD", time: 5000 },
+  ]);
+  // Only account a has equity; account b (same USD group) does not → denominator incomplete.
+  insertFunds(d, { account: "a", currency: "USD", totalAssets: 10_000, cash: 0, marketVal: 0, time: 5000 });
+  const { byCurrency } = openPositionsByCurrency(d, 5000);
+  const usd = byCurrency.find((c) => c.currency === "USD")!;
+  expect(usd.deployed).toBeCloseTo(2000); // 10×100 + 5×200 — full exposure still reported
+  expect(usd.equity).toBeNull(); // incomplete → not a partial sum
+  expect(usd.deployedPct).toBeNull();
+  expect(usd.riskPct).toBeNull();
 });
 
 test("openPositionsByCurrency leaves risk % null when no equity snapshot exists", () => {
@@ -87,6 +110,8 @@ test("tradeDetail expresses planned risk as % of equity at open (same currency),
   expect(det.accountEquity).toBe(10_000);
   expect(det.equityBasis).toBe("at_open");
   expect(det.riskPct).toBeCloseTo(0.005); // risk 50 / equity 10000
+  expect(det.positionSize).toBeCloseTo(1000); // avgEntry 100 × maxQty 10
+  expect(det.sizePct).toBeCloseTo(0.1); // 1000 / 10000 = 10% of the account
 });
 
 test("tradeDetail falls back to latest equity (approximate) when none precedes the open", () => {
@@ -154,12 +179,28 @@ test("metaView surfaces currencies, setups, tags, accounts, coverage window", ()
     `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok)
      VALUES ('t1','a','US.AAPL','USD','LONG','closed', 1000, 100, 10, 0, 1)`,
   );
-  d.run(`INSERT INTO journal (trade_id, setup, updated_at) VALUES ('t1','breakout',1)`);
+  d.run(`INSERT INTO journal (trade_id, setup, emotion, updated_at) VALUES ('t1','breakout','FOMO',1)`);
   d.run(`INSERT INTO journal_tags (trade_id, tag) VALUES ('t1','earnings')`);
   const m = metaView(d);
   expect(m.currencies).toContain("USD");
   expect(m.setups).toContain("breakout");
   expect(m.tags).toContain("earnings");
+  expect(m.emotions).toContain("FOMO"); // fed the emotion datalist / quick-pick chips
   expect(m.accounts).toContain("a");
   expect(typeof m.appVersion).toBe("string");
+});
+
+test("openPositions carries the open trade's id so the row can deep-link to its detail page", () => {
+  const d = db();
+  d.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop)
+     VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95)`,
+  );
+  insertPositionSnapshot(d, [
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, currency: "USD", time: 5000 },
+    { account: "a", symbol: "US.NVDA", qty: 5, avgCost: 500, currency: "USD", time: 5000 }, // no trade → null
+  ]);
+  const pos = openPositions(d, 5000);
+  expect(pos.find((p) => p.symbol === "US.AAPL")!.tradeId).toBe("t1");
+  expect(pos.find((p) => p.symbol === "US.NVDA")!.tradeId).toBeNull();
 });

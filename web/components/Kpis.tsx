@@ -1,5 +1,5 @@
 import type { CurrencyStats } from "../../src/domain/types";
-import { money, pct, rMultiple, signClass } from "../lib/format";
+import { money, price, pct, rMultiple, signClass } from "../lib/format";
 
 /** Currency-segmented KPI cards. One row of cards per currency — P&L is never combined across
  * currencies (each block is self-contained). */
@@ -26,6 +26,38 @@ export function Kpis({ stats }: { stats: CurrencyStats[] }) {
               label="Avg win / loss"
               value={`${money(s.avgWin, s.currency)}`}
               sub={`loss ${money(-s.avgLoss, s.currency)}`}
+            />
+            <Kpi
+              label="Avg risk / trade"
+              // avgRiskPct is non-null only when avgRisk is too (a % needs a risk AND equity), so the %
+              // branch can always show the dollar context. "≈" when the equity basis is approximate.
+              value={
+                s.avgRiskPct !== null
+                  ? `${s.sizingApprox ? "≈" : ""}${pct(s.avgRiskPct)}`
+                  : s.avgRisk !== null
+                    ? price(s.avgRisk, s.currency)
+                    : "—"
+              }
+              sub={
+                s.avgRiskPct !== null
+                  ? `of account · ≈ ${price(s.avgRisk as number, s.currency)}`
+                  : s.avgRisk !== null
+                    ? "per trade · sync funds for %"
+                    : undefined
+              }
+            />
+            <Kpi
+              label="Avg position size"
+              value={
+                s.avgSizePct !== null
+                  ? `${s.sizingApprox ? "≈" : ""}${pct(s.avgSizePct)}`
+                  : price(s.avgPositionSize, s.currency)
+              }
+              sub={
+                s.avgSizePct !== null
+                  ? `of account · ≈ ${price(s.avgPositionSize, s.currency)}`
+                  : `max ${price(s.maxPositionSize, s.currency)}`
+              }
             />
             {(s.avgMae !== null || s.avgMfe !== null) && (
               <Kpi

@@ -1,9 +1,11 @@
+import { useLocation } from "wouter";
 import { usePositions } from "../lib/hooks";
 import { price, money, pct, qty, signClass } from "../lib/format";
 
 /** Current holdings, grouped per currency (open risk is never summed across currencies). */
 export function Positions() {
   const { data, isLoading } = usePositions();
+  const [, navigate] = useLocation();
   if (isLoading) return <div className="spinner">Loading…</div>;
   const groups = data?.byCurrency ?? [];
   if (groups.length === 0) return <div className="empty card">No open positions — you're flat, or haven't synced.</div>;
@@ -15,13 +17,28 @@ export function Positions() {
         return (
           <div key={g.currency} style={{ marginBottom: 18 }}>
             <div className="section-title" style={{ marginTop: 0 }}>
-              {g.currency} · {g.positions.length} position{g.positions.length === 1 ? "" : "s"} · open risk {money(-totalRisk, g.currency)}
-              {g.riskPct !== null ? (
-                <span className="faint"> · {pct(g.riskPct)} of equity</span>
+              {g.currency} · {g.positions.length} position{g.positions.length === 1 ? "" : "s"} · deployed{" "}
+              {g.deployedPct !== null ? (
+                <>
+                  {pct(g.deployedPct)} of equity <span className="faint">({price(g.deployed, g.currency)})</span>
+                </>
               ) : (
-                <span className="faint" title="No account-equity snapshot yet — run a sync to capture it">
-                  {" "}· equity n/a
-                </span>
+                price(g.deployed, g.currency)
+              )}
+              {" · open risk "}
+              {g.riskPct !== null ? (
+                <>
+                  {pct(g.riskPct)} of equity <span className="faint">({money(-totalRisk, g.currency)})</span>
+                </>
+              ) : (
+                <>
+                  {money(-totalRisk, g.currency)}
+                  {g.equity === null && (
+                    <span className="faint" title="No account-equity snapshot yet — run a sync to capture it">
+                      {" "}· equity n/a
+                    </span>
+                  )}
+                </>
               )}
             </div>
             <div className="table-wrap">
@@ -38,7 +55,11 @@ export function Positions() {
                 </thead>
                 <tbody>
                   {g.positions.map((p) => (
-                    <tr key={`${p.account}|${p.symbol}`}>
+                    <tr
+                      key={`${p.account}|${p.symbol}`}
+                      className={p.tradeId ? "clickable" : ""}
+                      onClick={p.tradeId ? () => navigate(`/trades/${encodeURIComponent(p.tradeId!)}`) : undefined}
+                    >
                       <td className="mono">{p.symbol}</td>
                       <td className={p.qty >= 0 ? "pos" : "neg"} style={{ fontWeight: 600 }}>
                         {p.qty >= 0 ? "LONG" : "SHORT"}

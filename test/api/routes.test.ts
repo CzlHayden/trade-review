@@ -4,6 +4,7 @@ import { runMigrations } from "../../src/store/migrations";
 import { buildApi } from "../../src/api/routes";
 import { SyncRunner } from "../../src/api/sync-runner";
 import { upsertRawFills } from "../../src/store/repos";
+import { insertFunds } from "../../src/store/funds";
 import { rebuildDerived } from "../../src/sync/sync";
 import { DEFAULT_RULE_CONFIG } from "../../src/domain/types";
 
@@ -28,6 +29,45 @@ test("GET /api/stats returns currency-segmented stats", async () => {
   const body: any = await res.json();
   expect(body.byCurrency[0].currency).toBe("USD");
   expect(body.byCurrency[0].netPnl).toBe(100);
+});
+
+test("GET /api/stats sizes each currency's risk % against its OWN equity (never cross-currency)", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  // Two closed trades in different currencies, same account, each with a known planned risk.
+  db.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, close_time, avg_entry, avg_exit, max_qty, realized_pnl, fees, coverage_ok, risk)
+     VALUES ('u','a','US.AAPL','USD','LONG','closed',1000,2000,100,110,10,50,0,1,50),
+            ('h','a','HK.700','HKD','LONG','closed',1000,2000,200,210,5,30,0,1,100)`,
+  );
+  // Distinct equity per currency, snapshotted BEFORE the opens → at_open basis.
+  insertFunds(db, { account: "a", currency: "USD", totalAssets: 10_000, cash: 0, marketVal: 0, time: 500 });
+  insertFunds(db, { account: "a", currency: "HKD", totalAssets: 40_000, cash: 0, marketVal: 0, time: 500 });
+  const app = buildApi(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 3000 });
+  const body: any = await (await app(new Request("http://x/api/stats"))).json();
+  const usd = body.byCurrency.find((c: any) => c.currency === "USD");
+  const hkd = body.byCurrency.find((c: any) => c.currency === "HKD");
+  expect(usd.avgRiskPct).toBeCloseTo(0.005); // 50 / 10,000 (USD equity), NOT the HKD equity
+  expect(hkd.avgRiskPct).toBeCloseTo(0.0025); // 100 / 40,000 (HKD equity)
+  expect(usd.avgSizePct).toBeCloseTo(0.1); // (100×10) / 10,000
+  expect(hkd.avgSizePct).toBeCloseTo(0.025); // (200×5) / 40,000
+  expect(usd.sizingApprox).toBe(false); // funds snapshot precedes the open → exact at-open basis
+});
+
+test("GET /api/stats flags sizing % approximate when only latest equity is available", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  db.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, close_time, avg_entry, avg_exit, max_qty, realized_pnl, fees, coverage_ok, risk)
+     VALUES ('u','a','US.AAPL','USD','LONG','closed',1000,2000,100,110,10,50,0,1,50)`,
+  );
+  // Funds captured AFTER the trade opened → no at-open equity, only the latest fallback (approximate).
+  insertFunds(db, { account: "a", currency: "USD", totalAssets: 10_000, cash: 0, marketVal: 0, time: 5000 });
+  const app = buildApi(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 6000 });
+  const body: any = await (await app(new Request("http://x/api/stats"))).json();
+  const usd = body.byCurrency.find((c: any) => c.currency === "USD");
+  expect(usd.avgRiskPct).toBeCloseTo(0.005); // still computed against latest equity
+  expect(usd.sizingApprox).toBe(true); // but flagged approximate for the UI's "≈"
 });
 
 test("GET /api/trades embeds flags + setup + tags; unknown detail 404s", async () => {
