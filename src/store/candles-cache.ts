@@ -132,8 +132,13 @@ export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpt
         if (coverEnd > fetchFrom) addCoverage(db, symbol, resMs, fetchFrom, coverEnd, now);
         return readBars(db, symbol, resMs, fromMs, toMs);
       }
-      // Empty fresh response — the live source degrades fetch/parse failures to [] (it doesn't throw),
-      // so treat it like the catch path: serve cache only if fully covered, else no bars.
+      // Empty fresh response. The live source degrades fetch/parse failures to [] (it doesn't throw), so
+      // empty is ambiguous with "a soft error hid real bars" — treat it like the catch path: serve cache
+      // only if a single interval FULLY covers the request, else []. Trade-off: a genuinely-empty tail (a
+      // market closure spanning the coverage boundary — a multi-day HK/CN holiday, or a halted/delisted
+      // symbol) blanks an otherwise-cached near-now chart until one new bar closes. That fails safe (no
+      // bars, never a truncated window that would corrupt MAE/MFE) and self-heals; serving the cached
+      // prefix on empty instead could feed a truncated window to the excursion math.
       return covered ? readBars(db, symbol, resMs, fromMs, toMs) : [];
     },
   };
