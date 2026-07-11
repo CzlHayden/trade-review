@@ -102,7 +102,7 @@ export function TradeDetail({ id }: { id: string }) {
         savedDrawings={drawings.data?.drawings ?? NO_DRAWINGS}
         onDrawingsChange={onDrawingsChange}
         loading={candles.isFetching}
-        drawingsReady={drawings.isSuccess}
+        drawingsReady={drawings.isFetched}
       />
 
       <div className="kpi-row" style={{ marginTop: 12 }}>

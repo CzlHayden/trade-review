@@ -141,7 +141,7 @@ export function TradeChart({
     // (the whole point of loading ~1yr of bars). A short trade keeps the wide default view; a long
     // hold shrinks bar spacing just enough to keep its entry/initial-stop on screen.
     if (inFocus > 1 && width > 0 && barSpace > 0 && inFocus > (width / barSpace) * 0.9) {
-      c.setBarSpace((width * 0.9) / inFocus);
+      c.setBarSpace(Math.max(1, (width * 0.9) / inFocus)); // <1px is a silent no-op in klinecharts
     }
     c.scrollToTimestamp(to, 0);
   };
@@ -158,9 +158,14 @@ export function TradeChart({
     c.setSymbol({ ticker: symbol, pricePrecision: precision, volumePrecision: 0 });
     c.setPeriod(periodFor(res));
     c.resetData(); // forces a data-loader reload even when symbol+period are unchanged (value-only refetch)
+    // Fit only after real data has arrived, and only latch lastView once we actually fit — otherwise the
+    // empty first mount (candles fetch is slower than the trade query) would latch the view without
+    // fitting, and the fit would then be skipped when the candles land (cold-load entry off-screen).
     const viewChanged = !lastView.current || lastView.current.symbol !== symbol || lastView.current.res !== res;
-    lastView.current = { symbol, res };
-    if (viewChanged) fitAndScroll(c, focusFrom, focusTo);
+    if (viewChanged && bars.current.length > 0 && focusTo > 0) {
+      lastView.current = { symbol, res };
+      fitAndScroll(c, focusFrom, focusTo);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     symbol,
@@ -234,6 +239,9 @@ export function TradeChart({
 
   // Recreate saved user drawings on load / trade change (replace-not-accumulate). Each in its own
   // try/catch so one bad row can't poison the chart; `hydrating` blocks the load→save echo.
+  // Keyed on savedDrawings ONLY — not candle changes: overlays survive setPeriod/resetData (they live
+  // in a separate store and reposition by timestamp), so re-hydrating on a res switch would needlessly
+  // tear down and rebuild — and would wipe any drawing made during the pending debounce window.
   useEffect(() => {
     const c = chart.current;
     if (!c) return;
@@ -255,7 +263,7 @@ export function TradeChart({
     }
     hydrating.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savedDrawings, candles.length]);
+  }, [savedDrawings]);
 
   const toggle = (r: Res) => (
     <button
