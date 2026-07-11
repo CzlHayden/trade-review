@@ -169,6 +169,32 @@ test("GET /api/trades/:id/candles defaults to res=1d, reports the window, and re
   expect(calls[0]!.fromMs).toBe(1000 - 365 * 86_400_000); // openTime - 365d, per windowFor
 });
 
+test("GET .../candles?res=1wk|1mo|3mo are honored and mapped to the weekly/monthly/quarterly interval", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  upsertRawFills(db, [
+    { id: "f1", orderId: "o1", symbol: "US.AAPL", side: "BUY", qty: 10, price: 100, fee: 0, currency: "USD", time: 1000, account: "a" },
+    { id: "f2", orderId: "o2", symbol: "US.AAPL", side: "SELL", qty: 10, price: 110, fee: 0, currency: "USD", time: 2000, account: "a" },
+  ]);
+  await rebuildDerived(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 3000 });
+  const seenResMs: number[] = [];
+  const candles = {
+    getCandles: async (_symbol: string, _fromMs: number, _toMs: number, resMs: number) => {
+      seenResMs.push(resMs);
+      return [{ time: 1500, open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 }];
+    },
+  };
+  const app = buildApi(db, { candles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 3000 });
+  const id = ((await (await app(new Request("http://x/api/trades"))).json()) as any)[0].id;
+  const DAY = 86_400_000;
+  for (const [res, resMs] of [["1wk", 7 * DAY], ["1mo", 30 * DAY], ["3mo", 91 * DAY]] as const) {
+    const body: any = await (await app(new Request(`http://x/api/trades/${id}/candles?res=${res}`))).json();
+    expect(body.res).toBe(res); // honored, not coerced to 1d
+    expect(body.resMs).toBe(resMs);
+  }
+  expect(seenResMs).toEqual([7 * DAY, 30 * DAY, 91 * DAY]); // never coarsens (unbounded history)
+});
+
 test("GET .../candles?res=bogus falls back to 1d (unknown resolutions are ignored, not 500s)", async () => {
   const { app } = await api();
   const id = ((await (await app(new Request("http://x/api/trades"))).json()) as any)[0].id;

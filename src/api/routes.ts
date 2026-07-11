@@ -29,10 +29,22 @@ import { Mutex } from "./mutex";
 
 /** Coarser fallback for each intraday res, tried in order when a fetch comes back empty (e.g. the
  * trade predates Yahoo's retention at that resolution). "1d" has nothing coarser to fall back to. */
-const COARSER: Record<Res, Res | null> = { "15m": "1h", "1h": "1d", "1d": null };
+// Coarsen-on-empty ladder for the INTRADAY resolutions only (they can legitimately come back empty
+// past Yahoo's retention). Daily and the higher timeframes (weekly/monthly/quarterly) have unbounded
+// history — if they're empty the market is simply unsupported, so there's nothing coarser to try.
+const COARSER: Record<Res, Res | null> = {
+  "15m": "1h",
+  "1h": "1d",
+  "1d": null,
+  "1wk": null,
+  "1mo": null,
+  "3mo": null,
+};
+
+const RESOLUTIONS: Res[] = ["15m", "1h", "1d", "1wk", "1mo", "3mo"];
 
 function parseRes(v: string | null): Res {
-  return v === "1h" || v === "15m" ? v : "1d"; // unknown/absent → default 1d
+  return v !== null && (RESOLUTIONS as string[]).includes(v) ? (v as Res) : "1d"; // unknown/absent → 1d
 }
 
 export interface ApiDeps {

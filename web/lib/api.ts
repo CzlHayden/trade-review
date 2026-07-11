@@ -12,8 +12,9 @@ import type {
 } from "../../src/domain/types";
 import type { Journal, WeeklyEntry, WatchlistItem } from "../../src/domain/journal-types";
 import type { Drawing } from "../../src/store/drawings";
+import type { Res } from "../../src/core/candle-res"; // single source of truth for the resolution union
 
-export type { Breakdown, Candle, Flag, Stats, Trade, StopInfo, RawFill, RawOrder, Journal, WeeklyEntry, WatchlistItem, Drawing };
+export type { Breakdown, Candle, Flag, Stats, Trade, StopInfo, RawFill, RawOrder, Journal, WeeklyEntry, WatchlistItem, Drawing, Res };
 
 /** A trade row from GET /api/trades — base Trade plus embedded journal/flags for the list. */
 export interface TradeRow extends Trade {
@@ -96,8 +97,8 @@ export const api = {
   breakdowns: (by: string) => get<Breakdown[]>(`/api/breakdowns?by=${by}`),
   trades: () => get<TradeRow[]>("/api/trades"),
   trade: (id: string) => get<TradeDetail>(`/api/trades/${encodeURIComponent(id)}`),
-  candles: (id: string, res: "1d" | "1h" | "15m" = "1d") =>
-    get<{ res: "1d" | "1h" | "15m"; resMs: number; focusFrom: number; focusTo: number; candles: Candle[] }>(
+  candles: (id: string, res: Res = "1d") =>
+    get<{ res: Res; resMs: number; focusFrom: number; focusTo: number; candles: Candle[] }>(
       `/api/trades/${encodeURIComponent(id)}/candles?res=${res}`,
     ),
   positions: () => get<PositionsResponse>("/api/positions"),

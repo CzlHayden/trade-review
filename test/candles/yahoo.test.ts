@@ -16,7 +16,11 @@ test("yahooSymbol throws on unsupported market", () => {
 });
 
 test("intervalFor maps resolution ms", () => {
-  expect(intervalFor(86_400_000)).toBe("1d");
+  const DAY = 86_400_000;
+  expect(intervalFor(91 * DAY)).toBe("3mo"); // quarterly
+  expect(intervalFor(30 * DAY)).toBe("1mo"); // monthly
+  expect(intervalFor(7 * DAY)).toBe("1wk"); // weekly
+  expect(intervalFor(DAY)).toBe("1d");
   expect(intervalFor(3_600_000)).toBe("1h");
   expect(intervalFor(900_000)).toBe("15m");
   expect(intervalFor(60_000)).toBe("1m");
