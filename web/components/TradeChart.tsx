@@ -101,7 +101,9 @@ export function TradeChart({
   savedDrawings: Drawing[];
   onDrawingsChange: (d: Drawing[]) => void;
   loading: boolean; // a res-switch refetch is in flight (keepPreviousData still shows the old res)
-  drawingsReady: boolean; // the saved-drawings query has settled — don't let a draw PUT before we load
+  drawingsReady: boolean; // saved-drawings query SUCCEEDED (not just settled): if it errored we don't
+  // know the server's set, so tools stay disabled — a draw against the empty fallback would let the
+  // replace-set PUT wipe saved annotations. A refetch (retry/remount) re-enables.
 }) {
   const el = useRef<HTMLDivElement>(null);
   const chart = useRef<Chart | null>(null);

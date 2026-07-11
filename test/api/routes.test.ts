@@ -281,6 +281,22 @@ test("PUT drawings strips a non-schema point field (dataIndex) so overlays can't
   expect(get.drawings[0].points[0]).not.toHaveProperty("dataIndex");
 });
 
+test("PUT drawings preserves drawing-level extendData (labels/metadata) while stripping point dataIndex", async () => {
+  const { app } = await api();
+  const id = ((await (await app(new Request("http://x/api/trades"))).json()) as any)[0].id;
+  const put: any = await (
+    await app(
+      new Request(`http://x/api/trades/${id}/drawings`, {
+        method: "PUT",
+        body: JSON.stringify({
+          drawings: [{ name: "simpleAnnotation", points: [{ timestamp: 1000, value: 5, dataIndex: 2 }], extendData: "my note" }],
+        }),
+      }),
+    )
+  ).json();
+  expect(put.drawings).toEqual([{ name: "simpleAnnotation", points: [{ timestamp: 1000, value: 5 }], extendData: "my note" }]);
+});
+
 test("GET /api/trades/:id/candles 404s for an unknown trade id", async () => {
   const { app } = await api();
   const res = await app(new Request("http://x/api/trades/nope/candles"));

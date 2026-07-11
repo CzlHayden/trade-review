@@ -251,9 +251,12 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
           // Sanitize each point down to {timestamp, value}: raw klinecharts points also carry a
           // `dataIndex`, and if that were persisted the overlay would re-anchor by bar index after a
           // resolution change (the exact drift the timestamp/value-only schema exists to prevent).
+          // extendData lives at the drawing level (labels/metadata), isn't index-anchored, and is part
+          // of the declared Drawing shape — carry it through when present.
           const sanitized: Drawing[] = b.drawings.map((d) => ({
             name: d.name,
             points: d.points.map((p) => ({ timestamp: p.timestamp, value: p.value })),
+            ...(d.extendData !== undefined ? { extendData: d.extendData } : {}),
           }));
           // Drawings are user annotations, not derived data — no rebuildDerived here.
           upsertDrawings(db, id, sanitized, deps.now());
