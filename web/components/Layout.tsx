@@ -43,7 +43,7 @@ function SyncControl() {
 }
 
 function ThemeToggle() {
-  const [mode, setMode] = useTheme();
+  const { mode, setMode } = useTheme();
   const order: ThemeMode[] = ["system", "light", "dark"];
   const next = order[(order.indexOf(mode) + 1) % order.length]!;
   const glyph = mode === "dark" ? "☾" : mode === "light" ? "☀" : "◐";

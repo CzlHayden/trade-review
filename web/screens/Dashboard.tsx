@@ -7,7 +7,7 @@ import { TradesTable } from "../components/TradesTable";
 export function Dashboard() {
   const stats = useStats();
   const trades = useTrades();
-  const [mode] = useTheme();
+  const { themeKey } = useTheme();
 
   const byCurrency = stats.data?.byCurrency ?? [];
   const flagged = (trades.data ?? []).filter((t) => t.flags.length > 0);
@@ -32,7 +32,7 @@ export function Dashboard() {
                     {c.currency}
                   </div>
                   <EquityChart
-                    themeKey={mode}
+                    themeKey={themeKey}
                     points={c.equityCurve.map((p) => ({ time: p.time, value: p.cumPnl }))}
                   />
                 </div>

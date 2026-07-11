@@ -7,7 +7,7 @@ import { JournalEditor } from "../components/JournalEditor";
 
 export function TradeDetail({ id }: { id: string }) {
   const { data, isLoading } = useTradeDetail(id);
-  const [mode] = useTheme();
+  const { themeKey } = useTheme();
   const meta = useMeta();
   const t = data?.trade;
   const res: "day" | "hour" = t && t.holdSeconds !== null && t.holdSeconds < 2 * 86400 ? "hour" : "day";
@@ -45,7 +45,7 @@ export function TradeDetail({ id }: { id: string }) {
         candles={candles.data ?? []}
         fills={fills}
         marks={{ avgEntry: t.avgEntry, effectiveStop: t.effectiveStop, effectiveTp: t.effectiveTp, direction: t.direction }}
-        themeKey={mode}
+        themeKey={themeKey}
       />
 
       <div className="kpi-row" style={{ marginTop: 12 }}>

@@ -74,7 +74,9 @@ export function JournalEditor({
     });
   };
 
-  const stopInvalid = form.manualStop.trim() !== "" && Number.isNaN(Number(form.manualStop));
+  // Reject any non-finite value (NaN, Infinity, 1e999) — a non-finite number JSON-serializes to null
+  // and would silently CLEAR the authoritative manual stop with a 200.
+  const stopInvalid = form.manualStop.trim() !== "" && !Number.isFinite(Number(form.manualStop));
 
   return (
     <div className="card" style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12 }} data-key={key}>

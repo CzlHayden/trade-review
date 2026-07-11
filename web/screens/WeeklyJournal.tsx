@@ -3,7 +3,14 @@ import { Link } from "wouter";
 import { useWeek, usePutWeek } from "../lib/hooks";
 import { isoWeekKey, weekLabel } from "../lib/week";
 import { money, rMultiple, signClass, date } from "../lib/format";
-import type { WatchlistItem } from "../lib/api";
+
+/** Watchlist row while editing — keyLevel stays a STRING so typing "12.5" isn't round-tripped through
+ * Number() on each keystroke (which eats the decimal point). Parsed to number|null only at submit. */
+interface WatchRow {
+  symbol: string;
+  note: string;
+  keyLevel: string;
+}
 
 export function WeeklyJournal() {
   const [ref, setRef] = useState(() => new Date());
@@ -33,13 +40,13 @@ function WeekBody({ isoWeek }: { isoWeek: string }) {
   const save = usePutWeek(isoWeek);
   const [marketRead, setMarketRead] = useState("");
   const [tradedVsPlan, setTradedVsPlan] = useState("");
-  const [watch, setWatch] = useState<WatchlistItem[]>([]);
+  const [watch, setWatch] = useState<WatchRow[]>([]);
 
   useEffect(() => {
     if (!data) return;
     setMarketRead(data.marketRead ?? "");
     setTradedVsPlan(data.tradedVsPlan ?? "");
-    setWatch(data.watchlist ?? []);
+    setWatch((data.watchlist ?? []).map((w) => ({ symbol: w.symbol, note: w.note ?? "", keyLevel: w.keyLevel != null ? String(w.keyLevel) : "" })));
   }, [data]);
 
   if (isLoading) return <div className="spinner">Loading…</div>;
@@ -48,10 +55,16 @@ function WeekBody({ isoWeek }: { isoWeek: string }) {
     save.mutate({
       marketRead: marketRead || null,
       tradedVsPlan: tradedVsPlan || null,
-      watchlist: watch.filter((w) => w.symbol.trim()).map((w) => ({ symbol: w.symbol.trim(), note: w.note || null, keyLevel: w.keyLevel })),
+      watchlist: watch
+        .filter((w) => w.symbol.trim())
+        .map((w) => {
+          const lvl = w.keyLevel.trim();
+          const n = Number(lvl);
+          return { symbol: w.symbol.trim(), note: w.note.trim() || null, keyLevel: lvl !== "" && Number.isFinite(n) ? n : null };
+        }),
     });
 
-  const setRow = (i: number, patch: Partial<WatchlistItem>) =>
+  const setRow = (i: number, patch: Partial<WatchRow>) =>
     setWatch((ws) => ws.map((w, j) => (j === i ? { ...w, ...patch } : w)));
 
   return (
@@ -70,7 +83,7 @@ function WeekBody({ isoWeek }: { isoWeek: string }) {
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <label className="kpi-label">Watchlist</label>
-            <button className="btn" style={{ padding: "2px 8px" }} onClick={() => setWatch((w) => [...w, { symbol: "", note: null, keyLevel: null }])}>
+            <button className="btn" style={{ padding: "2px 8px" }} onClick={() => setWatch((w) => [...w, { symbol: "", note: "", keyLevel: "" }])}>
               + Add
             </button>
           </div>
@@ -79,10 +92,10 @@ function WeekBody({ isoWeek }: { isoWeek: string }) {
               <div key={i} style={{ display: "flex", gap: 6 }}>
                 <input className="input" style={{ minWidth: 0, flex: "0 0 110px" }} placeholder="US.NVDA" value={w.symbol}
                   onChange={(e) => setRow(i, { symbol: e.target.value })} />
-                <input className="input" style={{ minWidth: 0, flex: 1 }} placeholder="note" value={w.note ?? ""}
+                <input className="input" style={{ minWidth: 0, flex: 1 }} placeholder="note" value={w.note}
                   onChange={(e) => setRow(i, { note: e.target.value })} />
                 <input className="input" style={{ minWidth: 0, flex: "0 0 90px" }} placeholder="level" inputMode="decimal"
-                  value={w.keyLevel ?? ""} onChange={(e) => setRow(i, { keyLevel: e.target.value === "" ? null : Number(e.target.value) })} />
+                  value={w.keyLevel} onChange={(e) => setRow(i, { keyLevel: e.target.value })} />
                 <button className="btn btn-icon" onClick={() => setWatch((ws) => ws.filter((_, j) => j !== i))}>
                   ✕
                 </button>
@@ -96,6 +109,7 @@ function WeekBody({ isoWeek }: { isoWeek: string }) {
             {save.isPending ? "Saving…" : "Save week"}
           </button>
           {save.isSuccess && !save.isPending && <span className="pos" style={{ fontSize: 12 }}>Saved ✓</span>}
+          {save.isError && <span className="neg" style={{ fontSize: 12 }}>Save failed</span>}
         </div>
       </div>
 
