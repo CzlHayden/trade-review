@@ -4,7 +4,7 @@
 
 const DAY_MS = 86_400_000;
 
-export type Res = "1d" | "1h" | "15m";
+export type Res = "15m" | "1h" | "1d" | "1wk" | "1mo" | "3mo";
 
 export interface CandleWindow {
   res: Res;
@@ -15,10 +15,44 @@ export interface CandleWindow {
   focusTo: number;
 }
 
-const RES_MS: Record<Res, number> = { "1d": DAY_MS, "1h": 3_600_000, "15m": 900_000 };
+const YEAR_MS = 365 * DAY_MS;
+
+// Nominal bar duration per resolution (weekly/monthly/quarterly are approximate — only used to pick
+// the Yahoo interval and to report resMs to the client).
+const RES_MS: Record<Res, number> = {
+  "15m": 900_000,
+  "1h": 3_600_000,
+  "1d": DAY_MS,
+  "1wk": 7 * DAY_MS,
+  "1mo": 30 * DAY_MS,
+  "3mo": 91 * DAY_MS,
+};
+
+// How much history to load BEFORE the trade opens, per resolution. Coarser resolutions pull years of
+// context (Yahoo serves long daily/weekly/monthly history for free) so the run-up into the entry is
+// reviewable at every zoom level.
+const LOOKBACK_MS: Record<Res, number> = {
+  "15m": 2 * DAY_MS,
+  "1h": 10 * DAY_MS,
+  "1d": YEAR_MS,
+  "1wk": 3 * YEAR_MS,
+  "1mo": 10 * YEAR_MS,
+  "3mo": 25 * YEAR_MS,
+};
+
+// Minimum pad AFTER the trade closes (a few bars of breathing room), per resolution.
+const MIN_TAIL_MS: Record<Res, number> = {
+  "15m": DAY_MS,
+  "1h": 2 * DAY_MS,
+  "1d": 2 * DAY_MS,
+  "1wk": 7 * DAY_MS,
+  "1mo": 30 * DAY_MS,
+  "3mo": 91 * DAY_MS,
+};
 
 // Yahoo intraday retention, applied relative to `now` (not `openTime`) since it bounds how far
-// back the API will serve data today, regardless of when the trade happened.
+// back the API will serve data today, regardless of when the trade happened. Daily and coarser have
+// effectively unbounded history, so no reach limit.
 const REACH_MS: Partial<Record<Res, number>> = { "1h": 720 * DAY_MS, "15m": 58 * DAY_MS };
 
 export function windowFor(openTime: number, closeTime: number | null, now: number, res: Res): CandleWindow {
@@ -26,20 +60,15 @@ export function windowFor(openTime: number, closeTime: number | null, now: numbe
   const end = closeTime ?? now;
   const span = Math.max(end - openTime, 0);
 
-  let fromMs: number;
-  let toMs: number;
-  if (res === "1d") {
-    fromMs = openTime - 365 * DAY_MS;
-    toMs = end + Math.max(span * 0.05, 2 * DAY_MS);
-  } else if (res === "1h") {
-    fromMs = openTime - 10 * DAY_MS;
-    toMs = end + 2 * DAY_MS;
-  } else {
-    fromMs = openTime - 2 * DAY_MS;
-    toMs = end + DAY_MS;
-  }
-
   const reach = REACH_MS[res];
+  // Intraday (reach-limited) keeps a fixed tail; daily and coarser scale the tail with the trade span
+  // (a multi-year hold wants more breathing room after the close). This preserves the exact 1d/1h/15m
+  // windows from before the higher timeframes were added.
+  const tail = reach !== undefined ? MIN_TAIL_MS[res] : Math.max(span * 0.05, MIN_TAIL_MS[res]);
+
+  let fromMs = openTime - LOOKBACK_MS[res];
+  let toMs = end + tail;
+
   if (reach !== undefined) fromMs = Math.max(fromMs, now - reach);
   // A trade entirely older than the intraday reach clamps fromMs forward past toMs; collapse rather
   // than invert (the route's coarsen-on-empty ladder then falls back to 1d, which has no reach limit).

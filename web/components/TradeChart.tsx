@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { init, dispose, type Chart, type KLineData } from "klinecharts";
-import type { Candle, RawFill, Drawing } from "../lib/api";
+import type { Candle, RawFill, Drawing, Res } from "../lib/api";
 
 function themeColors() {
   const cs = getComputedStyle(document.documentElement);
@@ -16,10 +16,25 @@ function themeColors() {
   };
 }
 
-export type Res = "1d" | "1h" | "15m";
+export type { Res }; // re-exported for existing consumers (TradeDetail); canonical def in src/core/candle-res
+
+// Resolution toggle order (finest → coarsest) + button labels. Kept in sync with the server's
+// RESOLUTIONS list in src/api/routes.ts and the Res union in src/core/candle-res.ts.
+export const RES_OPTIONS: Array<{ res: Res; label: string }> = [
+  { res: "15m", label: "15m" },
+  { res: "1h", label: "1H" },
+  { res: "1d", label: "1D" },
+  { res: "1wk", label: "1W" },
+  { res: "1mo", label: "1M" },
+  { res: "3mo", label: "1Q" },
+];
+
 function periodFor(res: Res) {
   if (res === "1h") return { type: "hour" as const, span: 1 };
   if (res === "15m") return { type: "minute" as const, span: 15 };
+  if (res === "1wk") return { type: "week" as const, span: 1 };
+  if (res === "1mo") return { type: "month" as const, span: 1 };
+  if (res === "3mo") return { type: "month" as const, span: 3 }; // quarter = 3 months (no 'quarter' type)
   return { type: "day" as const, span: 1 };
 }
 
@@ -266,21 +281,21 @@ export function TradeChart({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savedDrawings, drawingsReady]);
 
-  const toggle = (r: Res) => (
+  const toggle = ({ res: r, label }: { res: Res; label: string }) => (
     <button
       key={r}
       className={`btn${requestedRes === r ? " btn-primary" : ""}`}
       style={{ padding: "2px 9px" }}
       onClick={() => onRes(r)}
     >
-      {r === "1d" ? "1D" : r === "1h" ? "1H" : "15m"}
+      {label}
     </button>
   );
 
   return (
     <div>
       <div className="toolbar" style={{ marginBottom: 6, gap: 6 }}>
-        {(["1d", "1h", "15m"] as Res[]).map(toggle)}
+        {RES_OPTIONS.map(toggle)}
         <div style={{ width: 1, alignSelf: "stretch", background: "var(--border)", margin: "0 4px" }} />
         {TOOLS.map((t) => (
           <button

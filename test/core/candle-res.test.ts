@@ -92,3 +92,25 @@ test("never inverts the window: a trade older than the intraday reach collapses,
     expect(w.focusTo).toBeLessThanOrEqual(w.toMs);
   }
 });
+
+test("higher timeframes load years of context and never reach-clamp", () => {
+  const YEAR = 365 * DAY;
+  const openTime = NOW - 100 * DAY;
+  const closeTime = NOW - 80 * DAY;
+  const cases: Array<{ res: "1wk" | "1mo" | "3mo"; resMs: number; minLookbackYears: number }> = [
+    { res: "1wk", resMs: 7 * DAY, minLookbackYears: 3 },
+    { res: "1mo", resMs: 30 * DAY, minLookbackYears: 10 },
+    { res: "3mo", resMs: 91 * DAY, minLookbackYears: 25 },
+  ];
+  for (const { res, resMs, minLookbackYears } of cases) {
+    const w = windowFor(openTime, closeTime, NOW, res);
+    expect(w.res).toBe(res);
+    expect(w.resMs).toBe(resMs);
+    // Loads the full multi-year lookback (no reach clamp on weekly/monthly/quarterly).
+    expect(openTime - w.fromMs).toBeGreaterThanOrEqual(minLookbackYears * YEAR - 1);
+    // Focus still brackets the trade, and the window is never inverted.
+    expect(w.focusFrom).toBeLessThanOrEqual(openTime);
+    expect(w.focusTo).toBeGreaterThanOrEqual(closeTime);
+    expect(w.fromMs).toBeLessThanOrEqual(w.toMs);
+  }
+});

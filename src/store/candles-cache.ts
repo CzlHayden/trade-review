@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { CandleSource } from "../domain/ports";
 import type { Candle } from "../domain/types";
 
-const TAIL_MS = 2 * 86_400_000; // last ~2 days may be partial/backfilled → refetch
+const TAIL_MS = 2 * 86_400_000; // last ~2 days may be partial/backfilled → refetch (on top of resMs)
 
 export interface CacheOpts {
   /** Current epoch ms. Pass a FUNCTION in a long-lived server so `nearNow`/coverage stay live across
@@ -95,7 +95,12 @@ export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpt
     async getCandles(symbol, fromMs, toMs, resMs) {
       const now = typeof opts.now === "function" ? opts.now() : opts.now;
       const covered = isCovered(intervals(db, symbol, resMs), fromMs, toMs);
-      const nearNow = toMs >= now - TAIL_MS;
+      // A bar starting at `t` isn't closed until `t + resMs <= now`, so the partial-bar tail is one
+      // bar-width PLUS the fixed TAIL margin. This matters for weekly/monthly/quarterly, where a bar
+      // stays in progress for up to 7/30/91 days — a fixed 2-day tail would cache a partial coarse bar
+      // and serve it frozen forever.
+      const closedBefore = now - TAIL_MS - resMs;
+      const nearNow = toMs >= closedBefore;
       if (covered && !nearNow) return readBars(db, symbol, resMs, fromMs, toMs);
 
       let fresh: Candle[] = [];
@@ -108,9 +113,10 @@ export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpt
         writeBars(db, symbol, resMs, fresh);
         // Record coverage only up to the CLOSED boundary. A near-now fetch may include a partial
         // current bar; marking [from,to] fully covered would later (once now advances past the tail)
-        // serve that stale partial bar without refetching. Capping coverage at now−TAIL forces the
-        // tail to refetch until its bars close. The just-fetched bars are still returned to this caller.
-        const coverEnd = Math.min(toMs, now - TAIL_MS);
+        // serve that stale partial bar without refetching. Capping coverage at the closed boundary
+        // (now − TAIL − one bar-width) forces the tail to refetch until its bars close. The just-fetched
+        // bars are still returned to this caller.
+        const coverEnd = Math.min(toMs, closedBefore);
         if (coverEnd > fromMs) addCoverage(db, symbol, resMs, fromMs, coverEnd, now);
         return readBars(db, symbol, resMs, fromMs, toMs);
       }

@@ -93,6 +93,27 @@ test("a near-now fetch is NOT recorded as covered past the closed boundary (no s
   expect(out).toEqual([]);
 });
 
+test("the closed-bar tail scales with resolution — a coarse (quarterly) partial bar isn't frozen in cache", async () => {
+  const d = db();
+  const QUARTER = 91 * DAY;
+  // A quarterly window ending ~30 days ago: WELL past the fixed 2-day tail, but the last quarterly bar
+  // is still in progress (a 91-day bar that started <91 days ago). With the fixed-2d tail this got
+  // marked covered and served frozen; with the resMs-aware tail (now − 2d − 91d) it must NOT be covered.
+  const now = 200 * DAY;
+  const toMs = now - 30 * DAY; // inside now − TAIL − resMs, so still "near now" for a quarterly bar
+  const good = { getCandles: async (_s: string, from: number, to: number) => bars([from, to]) };
+  await cachedCandles(d, good, { now }).getCandles("US.AAPL", 10 * DAY, toMs, QUARTER);
+  // Source down on a re-request of the same range: if the tail had been (wrongly) marked covered it
+  // would serve stale bars; because it wasn't, it degrades to [].
+  const bad = {
+    getCandles: async () => {
+      throw new Error("down");
+    },
+  };
+  const out = await cachedCandles(d, bad, { now: now + 5 * DAY }).getCandles("US.AAPL", 10 * DAY, toMs, QUARTER);
+  expect(out).toEqual([]);
+});
+
 test("source failure with a warm cache still returns cached bars", async () => {
   const d = db();
   const now = 100 * DAY;
