@@ -13,6 +13,7 @@ import {
   positionsAt,
 } from "../store/repos";
 import { distinctSetups, distinctTags, getJournal } from "../store/journal";
+import { getConfigValue, LAST_SNAPSHOT_TIME } from "../store/config";
 import pkg from "../../package.json";
 
 export interface OpenPosition {
@@ -49,10 +50,12 @@ export function openPositions(db: Database, snapshotTime: number): OpenPosition[
   });
 }
 
-/** The latest position-snapshot time (0 if none) — the batch a caller renders as "current". */
+/** The latest position-snapshot time (0 if none) — the batch a caller renders as "current". Read
+ * from the persisted snapshot marker, NOT MAX(raw_positions.time): an all-flat sync writes no rows,
+ * so MAX(time) would fall back to a previous non-empty batch and show stale (already-closed) holdings. */
 export function latestSnapshotTime(db: Database): number {
-  const row = db.query(`SELECT MAX(time) AS t FROM raw_positions`).get() as { t: number | null };
-  return row?.t ?? 0;
+  const v = getConfigValue(db, LAST_SNAPSHOT_TIME);
+  return v !== null ? Number(v) : 0;
 }
 
 export interface TradeDetail {

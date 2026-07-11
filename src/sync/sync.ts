@@ -19,6 +19,7 @@ import {
   upsertRawOrders,
 } from "../store/repos";
 import { manualStops } from "../store/journal";
+import { getConfigValue, LAST_SNAPSHOT_TIME, setConfigValue } from "../store/config";
 import { getSyncState, upsertSyncState } from "../store/sync-state";
 
 const DAY_MS = 86_400_000;
@@ -156,6 +157,10 @@ export async function pullRaw(
     insertPositionSnapshot(db, snapshot);
   }
 
+  // Persist the snapshot clock so a later standalone rebuild (journal/config edit) reconciles seeds
+  // against THIS batch, and an all-flat sync (which writes no rows) still reports zero holdings.
+  setConfigValue(db, LAST_SNAPSHOT_TIME, String(now));
+
   return { accounts: accounts.length };
 }
 
@@ -181,8 +186,12 @@ export async function rebuildDerived(
   const manual = manualStops(db); // trade id → user-entered stop (authoritative over inference)
   // Seed positions that predate our data window (reconciled against the current snapshot) so a
   // holding opened before coverage and sold inside it is built as coverage-incomplete rather than a
-  // phantom opposite-direction trade with wrong P&L. See deriveSeeds.
-  const seeds = deriveSeeds(allFills, positionsAt(db, now), now);
+  // phantom opposite-direction trade with wrong P&L. Reconcile against the persisted SNAPSHOT clock,
+  // not wall-clock `now`: a standalone rebuild (journal/config edit) uses a different `now` that
+  // matches no snapshot batch, and positionsAt(now) would be empty → spurious/omitted seeds. See
+  // deriveSeeds. Falls back to `now` only before the first sync (no snapshot, no fills → no seeds).
+  const snapTime = Number(getConfigValue(db, LAST_SNAPSHOT_TIME) ?? now);
+  const seeds = deriveSeeds(allFills, positionsAt(db, snapTime), snapTime);
   const built = buildTrades(allFills, seeds).sort(
     (a, b) => a.openTime - b.openTime || a.id.localeCompare(b.id),
   );

@@ -25,23 +25,28 @@ export function isoWeekOf(ms: number): string {
   return `${isoYear}-W${String(week).padStart(2, "0")}`;
 }
 
-/** [start, end) epoch-ms for an ISO week key. `end - start` is exactly 7 days. */
+/** [start, end) epoch-ms for an ISO week key: local Monday 00:00 to the next local Monday 00:00.
+ * Advances the calendar with `setDate` (not fixed DAY_MS arithmetic) so a DST-observing timezone
+ * still lands boundaries on local midnight rather than 23:00/01:00 — otherwise trades near a week
+ * edge get assigned to the wrong weekly journal. `end - start` is ~7 days (±1h across a DST edge). */
 export function weekRange(isoWeek: string): { start: number; end: number } {
   const [yStr, wStr] = isoWeek.split("-W");
   const isoYear = Number(yStr);
   const week = Number(wStr);
-  const jan4 = new Date(isoYear, 0, 4);
-  const week1Monday = new Date(isoYear, 0, 4 - isoDayNum(jan4)); // local midnight Monday of week 1
-  const start = week1Monday.getTime() + (week - 1) * 7 * DAY_MS;
-  return { start, end: start + 7 * DAY_MS };
+  const startDate = new Date(isoYear, 0, 4); // Jan 4 is always in ISO week 1
+  startDate.setDate(startDate.getDate() - isoDayNum(startDate)); // back to that week's Monday
+  startDate.setDate(startDate.getDate() + (week - 1) * 7); // forward to the target week's Monday
+  const endDate = new Date(startDate);
+  endDate.setDate(endDate.getDate() + 7); // the next local Monday (exclusive)
+  return { start: startDate.getTime(), end: endDate.getTime() };
 }
 
-/** Hold-time bucket for the "by hold-time" breakdown. `null` seconds = still-open trade. */
+/** Hold-time bucket for the "by hold-time" breakdown. The documented, gapless contract is
+ * `intraday` (<1d), `2-5d` (1d–<6d), `1-2w` (6d–<15d), `2w+` (≥15d), `open` (still-open). */
 export function holdBucket(holdSeconds: number | null): string {
   if (holdSeconds === null) return "open";
   const days = holdSeconds / 86_400;
   if (days < 1) return "intraday";
-  if (days < 2) return "1d";
   if (days < 6) return "2-5d";
   if (days < 15) return "1-2w";
   return "2w+";

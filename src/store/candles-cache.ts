@@ -61,8 +61,16 @@ export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpt
       }
       if (fresh.length) {
         writeBars(db, symbol, resMs, fresh);
-        const newFrom = coverage ? Math.min(coverage.from_ms, fromMs) : fromMs;
-        const newTo = coverage ? Math.max(coverage.to_ms, toMs) : toMs;
+        // Only widen the single coverage interval when the new range overlaps or abuts the stored
+        // one — otherwise the span between two DISJOINT ranges would be falsely marked covered and a
+        // later request across the gap would be served incomplete. Disjoint → keep just the new
+        // range; the old bars remain cached (immutable), so the old range simply refetches if asked.
+        let newFrom = fromMs;
+        let newTo = toMs;
+        if (coverage && fromMs <= coverage.to_ms && toMs >= coverage.from_ms) {
+          newFrom = Math.min(coverage.from_ms, fromMs);
+          newTo = Math.max(coverage.to_ms, toMs);
+        }
         db.run(
           `INSERT INTO candle_coverage (symbol,res_ms,from_ms,to_ms,fetched_at) VALUES (?,?,?,?,?)
            ON CONFLICT(symbol,res_ms) DO UPDATE SET from_ms=excluded.from_ms, to_ms=excluded.to_ms, fetched_at=excluded.fetched_at`,

@@ -25,3 +25,26 @@ export function setRuleConfig(db: Database, config: RuleConfig): void {
     [RULES_KEY, JSON.stringify(config)],
   );
 }
+
+// ---- generic config KV --------------------------------------------------------
+
+/** Marker for the timestamp of the most recent position-snapshot batch (written by pullRaw). It is
+ * the reconciliation clock for seed derivation and the "current holdings" batch — NOT wall-clock
+ * time. Using it (instead of `now`) lets a standalone rebuild reconcile against the last real
+ * snapshot, and lets an all-flat sync correctly report zero open positions. */
+export const LAST_SNAPSHOT_TIME = "last_snapshot_time";
+
+export function getConfigValue(db: Database, key: string): string | null {
+  const row = db.query("SELECT value FROM config WHERE key = ?").get(key) as
+    | { value: string }
+    | null;
+  return row?.value ?? null;
+}
+
+export function setConfigValue(db: Database, key: string, value: string): void {
+  db.run(
+    `INSERT INTO config (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    [key, value],
+  );
+}

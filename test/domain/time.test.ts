@@ -8,8 +8,11 @@ test("isoWeekOf/weekRange round-trip and cover the instant", () => {
   const { start, end } = weekRange(wk);
   expect(start).toBeLessThanOrEqual(ms);
   expect(end).toBeGreaterThan(ms);
-  expect(end - start).toBe(7 * 86_400_000);
-  expect(isoWeekOf(start)).toBe(wk);
+  // ~7 days: exactly 7×24h in no-DST zones, ±1h across a DST edge (local-calendar arithmetic).
+  expect(end - start).toBeGreaterThan(6.9 * 86_400_000);
+  expect(end - start).toBeLessThan(7.1 * 86_400_000);
+  expect(isoWeekOf(start)).toBe(wk); // start lands inside the same ISO week (no boundary drift)
+  expect(isoWeekOf(end)).not.toBe(wk); // end is exclusive — the next week
 });
 
 test("holdBucket buckets by hold seconds", () => {

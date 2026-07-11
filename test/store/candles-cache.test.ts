@@ -49,6 +49,25 @@ test("a range ending near now refetches the tail (partial last bar)", async () =
   expect(hits).toBe(2);
 });
 
+test("two DISJOINT ranges do not mark the gap between them as covered", async () => {
+  const d = db();
+  let hits = 0;
+  const now = 100 * DAY;
+  const src = {
+    getCandles: async (_s: string, from: number, to: number) => {
+      hits++;
+      return bars([from, to]);
+    },
+  };
+  const c = cachedCandles(d, src, { now });
+  await c.getCandles("US.AAPL", 1 * DAY, 3 * DAY, DAY); // range A (Jan-ish)
+  await c.getCandles("US.AAPL", 40 * DAY, 42 * DAY, DAY); // range B, disjoint from A
+  expect(hits).toBe(2);
+  // A request spanning the GAP between A and B must refetch (not be served as falsely covered).
+  await c.getCandles("US.AAPL", 10 * DAY, 12 * DAY, DAY);
+  expect(hits).toBe(3);
+});
+
 test("source failure with a warm cache still returns cached bars", async () => {
   const d = db();
   const now = 100 * DAY;

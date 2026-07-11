@@ -2,8 +2,9 @@ import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/store/migrations";
 import { rebuildDerived } from "../../src/sync/sync";
-import { allTrades, upsertRawFills } from "../../src/store/repos";
+import { allTrades, insertPositionSnapshot, upsertRawFills } from "../../src/store/repos";
 import { upsertJournal } from "../../src/store/journal";
+import { setConfigValue, LAST_SNAPSHOT_TIME } from "../../src/store/config";
 import { DEFAULT_RULE_CONFIG } from "../../src/domain/types";
 
 const noCandles = { getCandles: async () => [] };
@@ -42,4 +43,28 @@ test("a manual stop overrides inference → risk/rMultiple recompute via rebuild
   expect(after.risk).toBeCloseTo(50); // |100 - 95| * 10
   expect(after.rMultiple).toBeCloseTo(2); // realized 100 / risk 50
   expect(after.effectiveStop).toBe(95);
+});
+
+test("a standalone rebuild reconciles seeds against the snapshot MARKER, not wall-clock now", async () => {
+  // Pre-existing 10-long AAPL (snapshot at t=1000 shows the CURRENT 5 that remain after an in-window
+  // sell of 5). A journal-triggered rebuild passes a later wall-clock `now` that matches no snapshot.
+  const db = new Database(":memory:");
+  runMigrations(db);
+  insertPositionSnapshot(db, [
+    { account: "a", symbol: "US.AAPL", qty: 5, avgCost: 100, currency: "USD", time: 1000 },
+  ]);
+  setConfigValue(db, LAST_SNAPSHOT_TIME, "1000"); // pullRaw would have written this
+  upsertRawFills(db, [
+    { id: "s1", orderId: "o1", symbol: "US.AAPL", side: "SELL", qty: 5, price: 110, fee: 0, currency: "USD", time: 1500, account: "a" },
+  ]);
+
+  await rebuildDerived(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 9_999_999 });
+  const trades = allTrades(db);
+  expect(trades).toHaveLength(1);
+  // Seed = snapshot(5) − netFills(−5) = 10 long. Selling 5 leaves 5 → the trade stays OPEN and
+  // coverage-incomplete. If seeds had been reconciled against `now` (empty snapshot), the seed would
+  // be only 5 and the trade would wrongly CLOSE. This asserts the marker path.
+  expect(trades[0]!.status).toBe("open");
+  expect(trades[0]!.coverageOk).toBe(false);
+  expect(trades[0]!.maxQty).toBe(10);
 });
