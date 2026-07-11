@@ -19,6 +19,7 @@
   "dependencies": {
     "@tanstack/react-query": "^5.101.2",
     "futu-api": "^10.8.6808",
+    "klinecharts": "10.0.0",
     "lightweight-charts": "^5.2.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

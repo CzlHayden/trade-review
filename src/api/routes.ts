@@ -5,6 +5,7 @@ import type { Database } from "bun:sqlite";
 import type { CandleSource } from "../domain/ports";
 import type { RuleConfig, Trade } from "../domain/types";
 import { computeStats, breakdown } from "../core/analytics";
+import { type Res, windowFor } from "../core/candle-res";
 import { allTrades, flagsForTrade } from "../store/repos";
 import { holdBucket, isValidIsoWeek, weekRange } from "../domain/time";
 import type { Journal, WatchlistItem } from "../domain/journal-types";
@@ -15,6 +16,7 @@ import {
   upsertJournal,
   upsertWeeklyEntry,
 } from "../store/journal";
+import { getDrawings, upsertDrawings, type Drawing } from "../store/drawings";
 import { rebuildDerived } from "../sync/sync";
 import {
   latestSnapshotTime,
@@ -25,8 +27,13 @@ import {
 import type { SyncRunner } from "./sync-runner";
 import { Mutex } from "./mutex";
 
-const DAY_MS = 86_400_000;
-const PAD_MS = 2 * DAY_MS;
+/** Coarser fallback for each intraday res, tried in order when a fetch comes back empty (e.g. the
+ * trade predates Yahoo's retention at that resolution). "1d" has nothing coarser to fall back to. */
+const COARSER: Record<Res, Res | null> = { "15m": "1h", "1h": "1d", "1d": null };
+
+function parseRes(v: string | null): Res {
+  return v === "1h" || v === "15m" ? v : "1d"; // unknown/absent → default 1d
+}
 
 export interface ApiDeps {
   candles: CandleSource;
@@ -101,6 +108,35 @@ function breakdownBy(db: Database, by: string) {
 /** A 1..5 score is valid, or null/absent (the field is optional). */
 function validScore(v: unknown): boolean {
   return v == null || (typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 5);
+}
+
+const MAX_DRAWINGS = 200;
+const MAX_DRAWINGS_BYTES = 256 * 1024;
+
+/** A drawing point is `{timestamp?: number, value?: number}` — both optional, but if present must
+ * be numbers (never coerce a wrong-typed value; reject instead). */
+function validPoint(v: unknown): boolean {
+  if (v === null || typeof v !== "object") return false;
+  const p = v as Record<string, unknown>;
+  if ("timestamp" in p && p.timestamp !== undefined && typeof p.timestamp !== "number") return false;
+  if ("value" in p && p.value !== undefined && typeof p.value !== "number") return false;
+  return true;
+}
+
+function validDrawing(v: unknown): boolean {
+  if (v === null || typeof v !== "object") return false;
+  const d = v as Record<string, unknown>;
+  if (typeof d.name !== "string") return false;
+  if (!Array.isArray(d.points)) return false;
+  return d.points.every(validPoint);
+}
+
+/** Validate a PUT drawings body: an array of ≤200 well-shaped drawings, capped in serialized size. */
+function validDrawings(v: unknown): v is Drawing[] {
+  if (!Array.isArray(v)) return false;
+  if (v.length > MAX_DRAWINGS) return false;
+  if (!v.every(validDrawing)) return false;
+  return JSON.stringify(v).length <= MAX_DRAWINGS_BYTES;
 }
 
 /** Order-insensitive equality of two tag lists (getJournal returns tags sorted; a request may not). */
@@ -200,19 +236,44 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
           }
           return json(tradeDetail(db, id));
         }
+        if (seg.length === 4 && seg[3] === "drawings" && method === "GET") {
+          return json({ drawings: getDrawings(db, id) });
+        }
+        if (seg.length === 4 && seg[3] === "drawings" && method === "PUT") {
+          const b = await readJsonObject(req);
+          if (!b) return json({ error: "body must be a JSON object" }, 400);
+          if (!validDrawings(b.drawings)) {
+            return json(
+              { error: "drawings must be an array of ≤200 {name, points[, extendData]} entries" },
+              400,
+            );
+          }
+          // Drawings are user annotations, not derived data — no rebuildDerived here.
+          upsertDrawings(db, id, b.drawings, deps.now());
+          return json({ drawings: getDrawings(db, id) });
+        }
         if (seg.length === 4 && seg[3] === "candles" && method === "GET") {
           const trade = allTrades(db).find((t) => t.id === id);
           if (!trade) return json({ error: "trade not found" }, 404);
-          const resMs = url.searchParams.get("res") === "hour" ? 3_600_000 : DAY_MS;
-          const from = trade.openTime - PAD_MS;
-          const to = (trade.closeTime ?? deps.now()) + PAD_MS;
+          let res = parseRes(url.searchParams.get("res"));
+          let win = windowFor(trade.openTime, trade.closeTime, deps.now(), res);
           let bars: Awaited<ReturnType<CandleSource["getCandles"]>> = [];
-          try {
-            bars = await deps.candles.getCandles(trade.symbol, from, to, resMs);
-          } catch {
-            bars = [];
+          // Coarsen-on-empty: an intraday res can legitimately come back empty (the trade predates
+          // Yahoo's retention at that resolution) — retry one step coarser before giving up, and
+          // report whichever res actually produced bars.
+          for (;;) {
+            try {
+              bars = await deps.candles.getCandles(trade.symbol, win.fromMs, win.toMs, win.resMs);
+            } catch {
+              bars = [];
+            }
+            if (bars.length > 0) break;
+            const next = COARSER[res];
+            if (!next) break;
+            res = next;
+            win = windowFor(trade.openTime, trade.closeTime, deps.now(), res);
           }
-          return json(bars);
+          return json({ res, resMs: win.resMs, focusFrom: win.focusFrom, focusTo: win.focusTo, candles: bars });
         }
       }
       // GET /api/positions

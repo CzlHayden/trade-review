@@ -92,3 +92,20 @@ test("v6 adds account_funds keyed on (account, time, currency)", () => {
     expect(cols).toContain(c);
   }
 });
+
+test("v7 adds chart_drawings keyed on trade_id (orphan-tolerant, no FK to trades)", () => {
+  const db = memDb();
+  runMigrations(db);
+  const names = db
+    .query("SELECT name FROM sqlite_master WHERE type='table'")
+    .all()
+    .map((r: any) => r.name);
+  expect(names).toContain("chart_drawings");
+  const cols = db
+    .query("PRAGMA table_info(chart_drawings)")
+    .all()
+    .map((r: any) => r.name);
+  for (const c of ["trade_id", "data", "updated_at"]) {
+    expect(cols).toContain(c);
+  }
+});

@@ -1,152 +1,263 @@
 import { useEffect, useRef } from "react";
-import {
-  createChart,
-  CandlestickSeries,
-  createSeriesMarkers,
-  LineStyle,
-  type IChartApi,
-  type ISeriesApi,
-  type ISeriesMarkersPluginApi,
-  type IPriceLine,
-  type UTCTimestamp,
-  type SeriesMarker,
-  type Time,
-} from "lightweight-charts";
-import type { Candle, RawFill } from "../lib/api";
+import { init, dispose, type Chart, type KLineData } from "klinecharts";
+import type { Candle, RawFill, Drawing } from "../lib/api";
 
 function themeColors() {
   const cs = getComputedStyle(document.documentElement);
-  const v = (n: string) => cs.getPropertyValue(n).trim() || "#888";
+  const v = (n: string, fallback: string) => cs.getPropertyValue(n).trim() || fallback;
   return {
-    text: v("--text-muted"),
-    grid: v("--border"),
-    up: v("--pos"),
-    down: v("--neg"),
-    accent: v("--accent"),
-    warn: v("--warn"),
+    text: v("--text-muted", "#888"),
+    grid: v("--border", "#333"),
+    up: v("--pos", "#26a69a"),
+    down: v("--neg", "#ef5350"),
+    accent: v("--accent", "#4c8dff"),
+    warn: v("--warn", "#e0a341"),
+    axis: v("--text-faint", "#777"),
   };
 }
 
-/** Snap a fill's epoch-ms time to the bar it falls in (the last candle whose time ≤ fill), so a
- * marker sits on an existing daily/hourly bar rather than being dropped by Lightweight Charts. */
-function snap(fillMs: number, barsSec: number[]): UTCTimestamp {
-  const s = Math.floor(fillMs / 1000);
-  let chosen = barsSec[0] ?? s;
-  for (const b of barsSec) {
-    if (b <= s) chosen = b;
-    else break;
-  }
-  return chosen as UTCTimestamp;
+export type Res = "1d" | "1h" | "15m";
+function periodFor(res: Res) {
+  if (res === "1h") return { type: "hour" as const, span: 1 };
+  if (res === "15m") return { type: "minute" as const, span: 15 };
+  return { type: "day" as const, span: 1 };
+}
+
+/** klinecharts style overrides sampled from our CSS theme, so the chart re-themes with the app. */
+function chartStyles(c: ReturnType<typeof themeColors>) {
+  return {
+    grid: { horizontal: { color: c.grid, style: "dashed" as const }, vertical: { show: false } },
+    candle: {
+      bar: {
+        upColor: c.up, downColor: c.down,
+        upBorderColor: c.up, downBorderColor: c.down,
+        upWickColor: c.up, downWickColor: c.down,
+      },
+      priceMark: { high: { color: c.text }, low: { color: c.text }, last: { text: { color: "#fff" } } },
+      tooltip: { legend: { color: c.text } },
+    },
+    indicator: { tooltip: { legend: { color: c.text } } },
+    xAxis: { axisLine: { color: c.grid }, tickLine: { color: c.grid }, tickText: { color: c.axis } },
+    yAxis: { axisLine: { color: c.grid }, tickLine: { color: c.grid }, tickText: { color: c.axis } },
+    crosshair: {
+      horizontal: { text: { backgroundColor: c.accent } },
+      vertical: { text: { backgroundColor: c.accent } },
+    },
+  };
 }
 
 export interface ChartMarks {
   avgEntry: number;
-  effectiveStop: number | null;
+  plannedStop: number | null; // manual ?? initial — the R basis
+  effectiveStop: number | null; // last active/trailing stop
   effectiveTp: number | null;
+  riskKnown: boolean; // dash the planned stop when risk was not computed (seed/profit-side)
   direction: "LONG" | "SHORT";
 }
 
-/** Marked-up candlestick chart: candles + a marker per fill (buy ▲ below / sell ▼ above) + price
- * lines for avg entry, effective stop, and take-profit. Pure presentation from data the detail
- * already holds. */
+function toKline(c: Candle): KLineData {
+  return { timestamp: c.time, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume };
+}
+
+const MARKS = "marks"; // our locked trade marks
+const USER = "user"; // user drawings (persisted)
+
+const TOOLS: Array<{ name: string; label: string }> = [
+  { name: "segment", label: "Line" },
+  { name: "horizontalStraightLine", label: "H-line" },
+  { name: "rect", label: "Box" },
+  { name: "fibonacciLine", label: "Fib" },
+];
+
+/** Marked-up candlestick chart on klinecharts: candles + volume, fill markers, entry/stop/TP lines,
+ * a 1D/1H/15m resolution toggle, and drawing tools whose annotations persist per trade. */
 export function TradeChart({
+  symbol,
   candles,
+  res,
+  requestedRes,
+  onRes,
+  focusFrom,
+  focusTo,
   fills,
   marks,
   themeKey,
+  savedDrawings,
+  onDrawingsChange,
 }: {
+  symbol: string;
   candles: Candle[];
+  res: Res;
+  requestedRes: Res;
+  onRes: (r: Res) => void;
+  focusFrom: number;
+  focusTo: number;
   fills: RawFill[];
   marks: ChartMarks;
   themeKey: string;
+  savedDrawings: Drawing[];
+  onDrawingsChange: (d: Drawing[]) => void;
 }) {
   const el = useRef<HTMLDivElement>(null);
-  const chart = useRef<IChartApi | null>(null);
-  const series = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const markersApi = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
-  const priceLines = useRef<IPriceLine[]>([]);
+  const chart = useRef<Chart | null>(null);
+  const bars = useRef<KLineData[]>([]);
+  const hydrating = useRef(false); // suppress persistence while we recreate saved overlays
+  const onChange = useRef(onDrawingsChange);
+  onChange.current = onDrawingsChange;
 
+  // Init once. dispose() the INSTANCE in cleanup (dispose(element) can't find it — our div has no id).
   useEffect(() => {
     if (!el.current) return;
-    const c = createChart(el.current, {
-      autoSize: true,
-      height: 340,
-      layout: { background: { color: "transparent" }, fontSize: 11, attributionLogo: false },
-      rightPriceScale: { borderVisible: false },
-      timeScale: { borderVisible: false, timeVisible: true },
-      grid: { horzLines: { style: LineStyle.Dotted }, vertLines: { visible: false } },
-    });
-    const s = c.addSeries(CandlestickSeries, { borderVisible: false, wickVisible: true });
-    series.current = s;
+    const c = init(el.current);
+    if (!c) return;
     chart.current = c;
-    markersApi.current = createSeriesMarkers(s, []); // one markers primitive, updated via setMarkers
+    c.setStyles(chartStyles(themeColors()));
+    c.setDataLoader({ getBars: ({ type, callback }) => callback(type === "init" ? bars.current : [], false) });
+    c.createIndicator("VOL", false);
     return () => {
-      c.remove();
+      dispose(c);
       chart.current = null;
-      series.current = null;
-      markersApi.current = null;
-      priceLines.current = [];
     };
   }, []);
 
+  // Load data on candle/resolution change, then focus the trade window.
   useEffect(() => {
-    if (!series.current || !chart.current) return;
-    const s = series.current;
-    // Dedupe + sort candles ascending by second (LWC hard-errors on unsorted/dupes).
-    const bySec = new Map<number, Candle>();
-    for (const k of candles) bySec.set(Math.floor(k.time / 1000), k);
-    const bars = [...bySec.entries()].sort((a, b) => a[0] - b[0]);
-    s.setData(
-      bars.map(([t, k]) => ({ time: t as UTCTimestamp, open: k.open, high: k.high, low: k.low, close: k.close })),
-    );
+    const c = chart.current;
+    if (!c) return;
+    bars.current = candles.map(toKline).sort((a, b) => a.timestamp - b.timestamp);
+    c.setSymbol({ ticker: symbol, pricePrecision: 2, volumePrecision: 0 });
+    c.setPeriod(periodFor(res));
+    c.resetData();
+    if (focusTo > 0) c.scrollToTimestamp(focusTo, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, res, candles.length, candles[0]?.time, candles[candles.length - 1]?.time]);
 
-    const barsSec = bars.map(([t]) => t);
-    const c = themeColors();
-    const markers: SeriesMarker<Time>[] = fills
-      .slice()
-      .sort((a, b) => a.time - b.time)
-      .map((f) => ({
-        time: snap(f.time, barsSec),
-        position: f.side === "BUY" ? "belowBar" : "aboveBar",
-        color: f.side === "BUY" ? c.up : c.down,
-        shape: f.side === "BUY" ? "arrowUp" : "arrowDown",
-        text: `${f.side === "BUY" ? "+" : "−"}${f.qty}`,
-      }));
-    markersApi.current?.setMarkers(markers); // replace (not stack) markers
+  // Serialize the user's drawings to our persistence shape (timestamp+value only; strip dataIndex).
+  const persist = () => {
+    const c = chart.current;
+    if (!c || hydrating.current) return;
+    const drawings: Drawing[] = c.getOverlays({ groupId: USER }).map((o) => ({
+      name: o.name,
+      points: (o.points ?? []).map((p) => ({ timestamp: p.timestamp, value: p.value })),
+    }));
+    onChange.current(drawings);
+  };
 
-    // Replace price lines: remove the previous set, then draw the current entry/stop/tp.
-    for (const line of priceLines.current) s.removePriceLine(line);
-    priceLines.current = [];
-    priceLines.current.push(
-      s.createPriceLine({ price: marks.avgEntry, color: c.accent, lineWidth: 1, lineStyle: LineStyle.Dashed, title: "entry" }),
-    );
-    if (marks.effectiveStop !== null)
-      priceLines.current.push(
-        s.createPriceLine({ price: marks.effectiveStop, color: c.down, lineWidth: 1, lineStyle: LineStyle.Solid, title: "stop" }),
-      );
-    if (marks.effectiveTp !== null)
-      priceLines.current.push(
-        s.createPriceLine({ price: marks.effectiveTp, color: c.up, lineWidth: 1, lineStyle: LineStyle.Dashed, title: "tp" }),
-      );
+  const startDraw = (name: string) => {
+    chart.current?.createOverlay({
+      name,
+      groupId: USER,
+      onDrawEnd: () => (persist(), false),
+      onPressedMoveEnd: () => (persist(), false),
+      onRemoved: () => (persist(), false),
+    });
+  };
 
-    s.applyOptions({ upColor: c.up, downColor: c.down, wickUpColor: c.up, wickDownColor: c.down });
-    chart.current.applyOptions({ layout: { textColor: c.text }, grid: { horzLines: { color: c.grid } } });
-    chart.current.timeScale().fitContent();
-  }, [candles, fills, marks, themeKey]);
+  const clearDrawings = () => {
+    chart.current?.removeOverlay({ groupId: USER });
+    persist();
+  };
 
-  // The container must ALWAYS render so the chart's init effect binds to a live ref (a conditional
-  // early-return would leave the ref null on the first, still-loading render and never re-init).
+  // Draw/redraw the locked marks; also re-theme (both depend on resolved CSS colors via themeKey).
+  useEffect(() => {
+    const c = chart.current;
+    if (!c) return;
+    c.setStyles(chartStyles(themeColors()));
+    c.removeOverlay({ groupId: MARKS });
+    if (bars.current.length === 0) return;
+    const col = themeColors();
+    const line = (value: number, color: string, dashed: boolean) =>
+      c.createOverlay({
+        name: "horizontalStraightLine",
+        groupId: MARKS,
+        lock: true,
+        points: [{ value }],
+        styles: { line: { color, style: dashed ? "dashed" : "solid", size: 1 } },
+      });
+    line(marks.avgEntry, col.accent, true); // entry — blue
+    if (marks.plannedStop !== null) line(marks.plannedStop, col.down, !marks.riskKnown); // planned stop — red
+    if (marks.effectiveStop !== null && marks.effectiveStop !== marks.plannedStop)
+      line(marks.effectiveStop, col.warn, false); // effective stop — amber
+    if (marks.effectiveTp !== null) line(marks.effectiveTp, col.up, true); // tp — green
+    for (const f of fills) {
+      c.createOverlay({
+        name: "simpleAnnotation",
+        groupId: MARKS,
+        lock: true,
+        points: [{ timestamp: f.time, value: f.price }],
+        extendData: `${f.side === "BUY" ? "+" : "−"}${f.qty}`,
+        styles: { text: { color: f.side === "BUY" ? col.up : col.down } },
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marks, fills, themeKey, candles.length]);
+
+  // Recreate saved user drawings on load / trade change (replace-not-accumulate). Each in its own
+  // try/catch so one bad row can't poison the chart; `hydrating` blocks the load→save echo.
+  useEffect(() => {
+    const c = chart.current;
+    if (!c) return;
+    hydrating.current = true;
+    c.removeOverlay({ groupId: USER });
+    for (const d of savedDrawings) {
+      try {
+        c.createOverlay({
+          name: d.name,
+          groupId: USER,
+          points: d.points,
+          onDrawEnd: () => (persist(), false),
+          onPressedMoveEnd: () => (persist(), false),
+          onRemoved: () => (persist(), false),
+        });
+      } catch {
+        /* skip a malformed saved overlay */
+      }
+    }
+    hydrating.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedDrawings, candles.length]);
+
+  const toggle = (r: Res) => (
+    <button
+      key={r}
+      className={`btn${requestedRes === r ? " btn-primary" : ""}`}
+      style={{ padding: "2px 9px" }}
+      onClick={() => onRes(r)}
+    >
+      {r === "1d" ? "1D" : r === "1h" ? "1H" : "15m"}
+    </button>
+  );
+
   return (
-    <div className="card" style={{ position: "relative", width: "100%", height: 340 }}>
-      <div ref={el} style={{ width: "100%", height: "100%" }} />
-      {candles.length === 0 && (
-        <div
-          className="empty"
-          style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}
-        >
-          No candles for this window (source unavailable or unsupported market).
-        </div>
-      )}
+    <div>
+      <div className="toolbar" style={{ marginBottom: 6, gap: 6 }}>
+        {(["1d", "1h", "15m"] as Res[]).map(toggle)}
+        <div style={{ width: 1, alignSelf: "stretch", background: "var(--border)", margin: "0 4px" }} />
+        {TOOLS.map((t) => (
+          <button key={t.name} className="btn" style={{ padding: "2px 9px" }} onClick={() => startDraw(t.name)}>
+            {t.label}
+          </button>
+        ))}
+        <button className="btn" style={{ padding: "2px 9px" }} onClick={clearDrawings}>
+          Clear
+        </button>
+        {res !== requestedRes && (
+          <span className="faint" style={{ fontSize: 11, alignSelf: "center" }}>
+            no {requestedRes} data — showing {res}
+          </span>
+        )}
+      </div>
+      <div className="card" style={{ position: "relative", width: "100%", height: 380 }}>
+        <div ref={el} style={{ width: "100%", height: "100%" }} />
+        {candles.length === 0 && (
+          <div
+            className="empty"
+            style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}
+          >
+            No candles for this window (source unavailable or unsupported market).
+          </div>
+        )}
+      </div>
     </div>
   );
 }

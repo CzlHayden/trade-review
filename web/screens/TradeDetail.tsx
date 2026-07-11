@@ -1,5 +1,7 @@
-import { useMemo, type ReactNode } from "react";
-import { useTradeDetail, useCandles, useMeta, useTheme } from "../lib/hooks";
+import { useMemo, useState, useRef, useEffect, type ReactNode } from "react";
+import { useTradeDetail, useCandles, useMeta, useTheme, useDrawings, usePutDrawings } from "../lib/hooks";
+import type { Drawing } from "../lib/api";
+import type { Res } from "../components/TradeChart";
 import { money, price, pct, rMultiple, signClass, date, dateTime, holdTime, qty } from "../lib/format";
 import { FlagChips } from "../components/FlagChips";
 import { TradeChart } from "../components/TradeChart";
@@ -10,13 +12,41 @@ export function TradeDetail({ id }: { id: string }) {
   const { themeKey } = useTheme();
   const meta = useMeta();
   const t = data?.trade;
-  const res: "day" | "hour" = t && t.holdSeconds !== null && t.holdSeconds < 2 * 86400 ? "hour" : "day";
-  const candles = useCandles(id, res);
+  const [reqRes, setReqRes] = useState<Res>("1d");
+  const candles = useCandles(id, reqRes);
+  const drawings = useDrawings(id);
+  const putDrawings = usePutDrawings(id);
+
+  // Debounce drawing saves; flush the pending save on unmount so the last edit before navigating away
+  // is never lost.
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pending = useRef<Drawing[] | null>(null);
+  const flush = () => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    if (pending.current) {
+      putDrawings.mutate(pending.current);
+      pending.current = null;
+    }
+  };
+  useEffect(() => () => flush(), []); // flush on unmount
+  const onDrawingsChange = (d: Drawing[]) => {
+    pending.current = d;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(flush, 500);
+  };
   // Stable marks identity so background refetches don't rerun the chart effect (which calls fitContent
   // and would reset the user's zoom/pan). Keyed on the primitive fields the chart actually draws.
   const marks = useMemo(
-    () => ({ avgEntry: t?.avgEntry ?? 0, effectiveStop: t?.effectiveStop ?? null, effectiveTp: t?.effectiveTp ?? null, direction: t?.direction ?? "LONG" }),
-    [t?.avgEntry, t?.effectiveStop, t?.effectiveTp, t?.direction],
+    () => ({
+      avgEntry: t?.avgEntry ?? 0,
+      plannedStop: data?.journal?.manualStop ?? data?.stop?.initialStop ?? null, // the R basis
+      effectiveStop: t?.effectiveStop ?? null,
+      effectiveTp: t?.effectiveTp ?? null,
+      riskKnown: (t?.risk ?? null) !== null,
+      direction: t?.direction ?? "LONG",
+    }),
+    [t?.avgEntry, data?.journal?.manualStop, data?.stop?.initialStop, t?.effectiveStop, t?.effectiveTp, t?.risk, t?.direction],
   );
 
   if (isLoading) return <div className="spinner">Loading…</div>;
@@ -55,10 +85,18 @@ export function TradeDetail({ id }: { id: string }) {
       </div>
 
       <TradeChart
-        candles={candles.data ?? []}
+        symbol={t.symbol}
+        candles={candles.data?.candles ?? []}
+        res={candles.data?.res ?? "1d"}
+        requestedRes={reqRes}
+        onRes={setReqRes}
+        focusFrom={candles.data?.focusFrom ?? 0}
+        focusTo={candles.data?.focusTo ?? 0}
         fills={fills}
         marks={marks}
         themeKey={themeKey}
+        savedDrawings={drawings.data?.drawings ?? []}
+        onDrawingsChange={onDrawingsChange}
       />
 
       <div className="kpi-row" style={{ marginTop: 12 }}>
