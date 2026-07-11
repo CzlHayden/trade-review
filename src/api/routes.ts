@@ -23,6 +23,7 @@ import {
   type OpenPosition,
 } from "./views";
 import type { SyncRunner } from "./sync-runner";
+import { Mutex } from "./mutex";
 
 const DAY_MS = 86_400_000;
 const PAD_MS = 2 * DAY_MS;
@@ -32,6 +33,9 @@ export interface ApiDeps {
   config: RuleConfig;
   sync: SyncRunner | null;
   now: () => number;
+  /** Shared with the sync job so journal-triggered rebuilds serialize with a running sync's rebuild
+   * (both must not overwrite each other). Defaults to a fresh mutex when omitted (tests). */
+  rebuildLock?: Mutex;
 }
 
 function json(data: unknown, status = 200): Response {
@@ -115,6 +119,7 @@ function positionsByCurrency(positions: OpenPosition[]) {
 }
 
 export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise<Response> {
+  const rebuildLock = deps.rebuildLock ?? new Mutex();
   return async (req) => {
     const url = new URL(req.url);
     const seg = url.pathname.split("/").filter(Boolean); // ["api","trades","t1","candles"]
@@ -166,8 +171,11 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
           };
           upsertJournal(db, journal);
           // Setup/tags feed breakdowns and a manual stop feeds risk/R/flags — re-derive through the
-          // single tested pipeline (no OpenD round-trip).
-          await rebuildDerived(db, { candles: deps.candles, config: deps.config, now: deps.now() });
+          // single tested pipeline (no OpenD round-trip). Serialized with a running sync's rebuild via
+          // the shared lock so the two can't interleave and clobber each other's derived rows.
+          await rebuildLock.runExclusive(() =>
+            rebuildDerived(db, { candles: deps.candles, config: deps.config, now: deps.now() }),
+          );
           return json(tradeDetail(db, id));
         }
         if (seg.length === 4 && seg[3] === "candles" && method === "GET") {

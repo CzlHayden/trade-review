@@ -11,9 +11,9 @@ import {
   allTrades,
   flagsForTrade,
   positionsAt,
+  snapshotClock,
 } from "../store/repos";
 import { distinctSetups, distinctTags, getJournal } from "../store/journal";
-import { getConfigValue, LAST_SNAPSHOT_TIME } from "../store/config";
 import pkg from "../../package.json";
 
 export interface OpenPosition {
@@ -50,12 +50,11 @@ export function openPositions(db: Database, snapshotTime: number): OpenPosition[
   });
 }
 
-/** The latest position-snapshot time (0 if none) — the batch a caller renders as "current". Read
- * from the persisted snapshot marker, NOT MAX(raw_positions.time): an all-flat sync writes no rows,
- * so MAX(time) would fall back to a previous non-empty batch and show stale (already-closed) holdings. */
+/** The latest position-snapshot time (0 if none) — the batch a caller renders as "current". Uses
+ * the persisted snapshot marker (so an all-flat sync, which writes no rows, correctly reports zero
+ * holdings instead of a stale prior batch); snapshotClock backfills a pre-marker migrated DB. */
 export function latestSnapshotTime(db: Database): number {
-  const v = getConfigValue(db, LAST_SNAPSHOT_TIME);
-  return v !== null ? Number(v) : 0;
+  return snapshotClock(db, 0);
 }
 
 export interface TradeDetail {

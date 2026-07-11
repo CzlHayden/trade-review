@@ -57,7 +57,10 @@ export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpt
       try {
         fresh = await source.getCandles(symbol, fromMs, toMs, resMs);
       } catch {
-        return readBars(db, symbol, resMs, fromMs, toMs); // degrade to cache on source failure
+        // Degrade to cache ONLY when it fully covers the request. Returning whatever bars happen to
+        // overlap a partially-covered range would feed a wrong excursion window into MAE/MFE (e.g. an
+        // old open-trade window after the trade closed) — better to return none and let mae/mfe null.
+        return covered ? readBars(db, symbol, resMs, fromMs, toMs) : [];
       }
       if (fresh.length) {
         writeBars(db, symbol, resMs, fresh);

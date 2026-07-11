@@ -81,5 +81,21 @@ test("source failure with a warm cache still returns cached bars", async () => {
   };
   const c2 = cachedCandles(d, bad, { now });
   const out = await c2.getCandles("US.AAPL", 1 * DAY, 3 * DAY, DAY);
-  expect(out.length).toBeGreaterThan(0); // served from cache despite source throwing
+  expect(out.length).toBeGreaterThan(0); // served from cache despite source throwing (fully covered)
+});
+
+test("source failure on a NOT-fully-covered range degrades to [] (no partial-window bars)", async () => {
+  const d = db();
+  const now = 100 * DAY;
+  const good = { getCandles: async (_s: string, from: number) => bars([from, from + DAY]) };
+  await cachedCandles(d, good, { now }).getCandles("US.AAPL", 1 * DAY, 3 * DAY, DAY); // covers [1,3]d only
+  const bad = {
+    getCandles: async () => {
+      throw new Error("network down");
+    },
+  };
+  // Request a wider range the cache only partially covers; on failure it must NOT return the [1,3]d
+  // overlap (which would be a wrong excursion window), but degrade to no bars.
+  const out = await cachedCandles(d, bad, { now }).getCandles("US.AAPL", 1 * DAY, 50 * DAY, DAY);
+  expect(out).toEqual([]);
 });

@@ -1,5 +1,16 @@
 import type { Database } from "bun:sqlite";
 import type { Flag, RawFill, RawOrder, RawPosition, Trade } from "../domain/types";
+import { getConfigValue, LAST_SNAPSHOT_TIME } from "./config";
+
+/** The clock of the current position snapshot: the persisted marker if present; else the latest
+ * stored snapshot time (backfills a DB migrated before the marker existed); else `fallback` (fresh
+ * DB with no snapshots). Callers use it to reconcile seeds and render "current" holdings. */
+export function snapshotClock(db: Database, fallback: number): number {
+  const marker = getConfigValue(db, LAST_SNAPSHOT_TIME);
+  if (marker !== null) return Number(marker);
+  const row = db.query(`SELECT MAX(time) AS t FROM raw_positions`).get() as { t: number | null };
+  return row?.t ?? fallback;
+}
 
 // ---- raw_fills ----------------------------------------------------------------
 

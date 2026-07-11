@@ -12,6 +12,7 @@ import { yahooCandles } from "./candles/yahoo";
 import { buildApi } from "./api/routes";
 import { serveStatic } from "./api/static";
 import { SyncRunner } from "./api/sync-runner";
+import { Mutex } from "./api/mutex";
 import { runSync, type SyncResult } from "./sync/sync";
 import { connectFutu } from "./futu/client";
 
@@ -33,19 +34,22 @@ export function main(): void {
   const config = getRuleConfig(db);
   const candles = cachedCandles(db, yahooCandles, { now: Date.now() });
 
+  // Shared by the sync job and journal-triggered rebuilds so the two rebuilds never interleave.
+  const rebuildLock = new Mutex();
   // The sync job holds the OpenD socket only for its own duration (connect→pull→rebuild→close).
-  const syncJob = async (): Promise<SyncResult> => {
-    const key = process.env.OPEND_WS_KEY || undefined;
-    const port = Number(process.env.OPEND_PORT ?? 33334);
-    const client = await connectFutu({ port, key });
-    try {
-      return await runSync({ db, client, candles, config, now: Date.now() });
-    } finally {
-      client.close();
-    }
-  };
+  const syncJob = (): Promise<SyncResult> =>
+    rebuildLock.runExclusive(async () => {
+      const key = process.env.OPEND_WS_KEY || undefined;
+      const port = Number(process.env.OPEND_PORT ?? 33334);
+      const client = await connectFutu({ port, key });
+      try {
+        return await runSync({ db, client, candles, config, now: Date.now() });
+      } finally {
+        client.close();
+      }
+    });
   const sync = new SyncRunner(db, syncJob, Date.now);
-  const api = buildApi(db, { candles, config, sync, now: Date.now });
+  const api = buildApi(db, { candles, config, sync, now: Date.now, rebuildLock });
 
   const server = Bun.serve({
     hostname: "127.0.0.1", // localhost bind is the entire security model (single local user)

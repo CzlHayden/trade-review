@@ -15,11 +15,12 @@ import {
   insertPositionSnapshot,
   positionsAt,
   replaceDerived,
+  snapshotClock,
   upsertRawFills,
   upsertRawOrders,
 } from "../store/repos";
 import { manualStops } from "../store/journal";
-import { getConfigValue, LAST_SNAPSHOT_TIME, setConfigValue } from "../store/config";
+import { LAST_SNAPSHOT_TIME, setConfigValue } from "../store/config";
 import { getSyncState, upsertSyncState } from "../store/sync-state";
 
 const DAY_MS = 86_400_000;
@@ -189,8 +190,9 @@ export async function rebuildDerived(
   // phantom opposite-direction trade with wrong P&L. Reconcile against the persisted SNAPSHOT clock,
   // not wall-clock `now`: a standalone rebuild (journal/config edit) uses a different `now` that
   // matches no snapshot batch, and positionsAt(now) would be empty → spurious/omitted seeds. See
-  // deriveSeeds. Falls back to `now` only before the first sync (no snapshot, no fills → no seeds).
-  const snapTime = Number(getConfigValue(db, LAST_SNAPSHOT_TIME) ?? now);
+  // deriveSeeds. snapshotClock backfills the latest stored snapshot for a pre-marker (migrated) DB,
+  // and falls back to `now` only before the first sync (no snapshot, no fills → no seeds).
+  const snapTime = snapshotClock(db, now);
   const seeds = deriveSeeds(allFills, positionsAt(db, snapTime), snapTime);
   const built = buildTrades(allFills, seeds).sort(
     (a, b) => a.openTime - b.openTime || a.id.localeCompare(b.id),

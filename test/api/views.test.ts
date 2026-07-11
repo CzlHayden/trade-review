@@ -1,8 +1,9 @@
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/store/migrations";
-import { openPositions, metaView } from "../../src/api/views";
+import { openPositions, metaView, latestSnapshotTime } from "../../src/api/views";
 import { insertPositionSnapshot } from "../../src/store/repos";
+import { setConfigValue, LAST_SNAPSHOT_TIME } from "../../src/store/config";
 
 function db() {
   const d = new Database(":memory:");
@@ -35,6 +36,18 @@ test("openPositions leaves open risk null when the open trade has no effective s
     { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, currency: "USD", time: 5000 },
   ]);
   expect(openPositions(d, 5000)[0]!.openRisk).toBeNull();
+});
+
+test("latestSnapshotTime prefers the marker, backfilling from stored snapshots when it's absent", () => {
+  const d = db();
+  // Migrated (pre-marker) DB: no marker, but raw_positions has the last sync batch → use MAX(time).
+  insertPositionSnapshot(d, [
+    { account: "a", symbol: "US.AAPL", qty: 1, avgCost: 1, currency: "USD", time: 4000 },
+  ]);
+  expect(latestSnapshotTime(d)).toBe(4000);
+  // Once a sync writes the marker, it wins (so an all-flat sync can report zero holdings).
+  setConfigValue(d, LAST_SNAPSHOT_TIME, "9000");
+  expect(latestSnapshotTime(d)).toBe(9000);
 });
 
 test("metaView surfaces currencies, setups, tags, accounts, coverage window", () => {
