@@ -2,6 +2,7 @@ import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/store/migrations";
 import { buildApi } from "../../src/api/routes";
+import { SyncRunner } from "../../src/api/sync-runner";
 import { upsertRawFills } from "../../src/store/repos";
 import { rebuildDerived } from "../../src/sync/sync";
 import { DEFAULT_RULE_CONFIG } from "../../src/domain/types";
@@ -120,4 +121,31 @@ test("weekly entry GET/PUT round-trips and lists that week's trades", async () =
   const got: any = await (await app(new Request("http://x/api/journal/weeks/2026-W28"))).json();
   expect(got.marketRead).toBe("risk-on");
   expect(Array.isArray(got.trades)).toBe(true);
+});
+
+test("POST /api/sync starts (202) then refuses a concurrent start (409); status is readable", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  const runner = new SyncRunner(
+    db,
+    async () => {
+      await new Promise((r) => setTimeout(r, 20));
+      return { accounts: 1, fills: 0, orders: 0, trades: 0, flags: 0 };
+    },
+    () => 1,
+  );
+  const app = buildApi(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: runner, now: () => 1 });
+  const first = await app(new Request("http://x/api/sync", { method: "POST" }));
+  expect(first.status).toBe(202);
+  const second = await app(new Request("http://x/api/sync", { method: "POST" }));
+  expect(second.status).toBe(409);
+  const status: any = await (await app(new Request("http://x/api/sync/status"))).json();
+  expect(status.running).toBe(true);
+  await runner.whenIdle();
+});
+
+test("sync endpoints 503 when no runner is wired", async () => {
+  const { app } = await api(); // sync: null
+  const res = await app(new Request("http://x/api/sync", { method: "POST" }));
+  expect(res.status).toBe(503);
 });

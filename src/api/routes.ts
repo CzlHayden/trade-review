@@ -194,6 +194,18 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
         return json(metaView(db));
       }
 
+      // POST /api/sync (start; 409 if already running) + GET /api/sync/status
+      if (seg[1] === "sync") {
+        if (!deps.sync) return json({ error: "sync unavailable" }, 503);
+        if (seg.length === 2 && method === "POST") {
+          const started = deps.sync.start();
+          return json(deps.sync.status(), started ? 202 : 409);
+        }
+        if (seg.length === 3 && seg[2] === "status" && method === "GET") {
+          return json(deps.sync.status());
+        }
+      }
+
       // /api/journal/weeks/:isoWeek  (GET + PUT); trades are associated by date at read time.
       if (seg.length === 4 && seg[1] === "journal" && seg[2] === "weeks") {
         const isoWeek = decodeURIComponent(seg[3]!);
