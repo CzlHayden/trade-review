@@ -38,18 +38,60 @@ function writeBars(db: Database, symbol: string, resMs: number, candles: Candle[
   })();
 }
 
+interface Interval {
+  from_ms: number;
+  to_ms: number;
+}
+
+function intervals(db: Database, symbol: string, resMs: number): Interval[] {
+  return db
+    .query(`SELECT from_ms, to_ms FROM candle_coverage WHERE symbol=? AND res_ms=? ORDER BY from_ms ASC`)
+    .all(symbol, resMs) as Interval[];
+}
+
+/** True when a SINGLE stored interval fully contains [from, to]. A request spanning a gap between
+ * two disjoint intervals is intentionally not covered → it refetches. */
+function isCovered(ivs: Interval[], from: number, to: number): boolean {
+  return ivs.some((iv) => iv.from_ms <= from && iv.to_ms >= to);
+}
+
+/** Merge [from, to] into the stored intervals: union it with every overlapping/adjacent interval,
+ * delete those, and insert the single union. Disjoint intervals are preserved as separate rows. */
+function addCoverage(db: Database, symbol: string, resMs: number, from: number, to: number, at: number): void {
+  const ivs = intervals(db, symbol, resMs);
+  let lo = from;
+  let hi = to;
+  const merged: number[] = [];
+  for (const iv of ivs) {
+    if (iv.from_ms <= hi && iv.to_ms >= lo) {
+      // overlap or touch
+      lo = Math.min(lo, iv.from_ms);
+      hi = Math.max(hi, iv.to_ms);
+      merged.push(iv.from_ms);
+    }
+  }
+  const del = db.prepare(`DELETE FROM candle_coverage WHERE symbol=? AND res_ms=? AND from_ms=?`);
+  const ins = db.prepare(
+    `INSERT INTO candle_coverage (symbol,res_ms,from_ms,to_ms,fetched_at) VALUES (?,?,?,?,?)
+     ON CONFLICT(symbol,res_ms,from_ms) DO UPDATE SET to_ms=excluded.to_ms, fetched_at=excluded.fetched_at`,
+  );
+  db.transaction(() => {
+    for (const f of merged) del.run(symbol, resMs, f);
+    ins.run(symbol, resMs, lo, hi, at);
+  })();
+}
+
 /**
  * Wrap a CandleSource so bars fetched once are cached. Closed bars are immutable; only a range whose
- * end is within TAIL_MS of `now` refetches (the last bar is partial and the source backfills). A
- * source failure with a warm cache degrades to the cached bars rather than throwing.
+ * end is within TAIL_MS of `now` refetches (the last bar is partial and the source backfills). On a
+ * source failure/empty response the cache serves the request ONLY if a stored interval fully covers
+ * it — a partially-covered range degrades to [] so a wrong window never reaches MAE/MFE. Coverage is
+ * multi-interval, so two disjoint fetched windows both stay served.
  */
 export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpts): CandleSource {
   return {
     async getCandles(symbol, fromMs, toMs, resMs) {
-      const coverage = db
-        .query(`SELECT from_ms, to_ms FROM candle_coverage WHERE symbol=? AND res_ms=?`)
-        .get(symbol, resMs) as { from_ms: number; to_ms: number } | null;
-      const covered = coverage !== null && coverage.from_ms <= fromMs && coverage.to_ms >= toMs;
+      const covered = isCovered(intervals(db, symbol, resMs), fromMs, toMs);
       const nearNow = toMs >= opts.now - TAIL_MS;
       if (covered && !nearNow) return readBars(db, symbol, resMs, fromMs, toMs);
 
@@ -57,33 +99,15 @@ export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpt
       try {
         fresh = await source.getCandles(symbol, fromMs, toMs, resMs);
       } catch {
-        // Degrade to cache ONLY when it fully covers the request. Returning whatever bars happen to
-        // overlap a partially-covered range would feed a wrong excursion window into MAE/MFE (e.g. an
-        // old open-trade window after the trade closed) — better to return none and let mae/mfe null.
         return covered ? readBars(db, symbol, resMs, fromMs, toMs) : [];
       }
       if (fresh.length) {
         writeBars(db, symbol, resMs, fresh);
-        // Only widen the single coverage interval when the new range overlaps or abuts the stored
-        // one — otherwise the span between two DISJOINT ranges would be falsely marked covered and a
-        // later request across the gap would be served incomplete. Disjoint → keep just the new
-        // range; the old bars remain cached (immutable), so the old range simply refetches if asked.
-        let newFrom = fromMs;
-        let newTo = toMs;
-        if (coverage && fromMs <= coverage.to_ms && toMs >= coverage.from_ms) {
-          newFrom = Math.min(coverage.from_ms, fromMs);
-          newTo = Math.max(coverage.to_ms, toMs);
-        }
-        db.run(
-          `INSERT INTO candle_coverage (symbol,res_ms,from_ms,to_ms,fetched_at) VALUES (?,?,?,?,?)
-           ON CONFLICT(symbol,res_ms) DO UPDATE SET from_ms=excluded.from_ms, to_ms=excluded.to_ms, fetched_at=excluded.fetched_at`,
-          [symbol, resMs, newFrom, newTo, opts.now],
-        );
+        addCoverage(db, symbol, resMs, fromMs, toMs, opts.now);
         return readBars(db, symbol, resMs, fromMs, toMs);
       }
       // Empty fresh response — the live source degrades fetch/parse failures to [] (it doesn't throw),
-      // so this is the same hazard as the catch path: serve cache ONLY if it fully covers the request,
-      // else degrade to no bars rather than leaking a partial (wrong) excursion window.
+      // so treat it like the catch path: serve cache only if fully covered, else no bars.
       return covered ? readBars(db, symbol, resMs, fromMs, toMs) : [];
     },
   };

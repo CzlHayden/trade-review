@@ -41,6 +41,15 @@ export function weekRange(isoWeek: string): { start: number; end: number } {
   return { start: startDate.getTime(), end: endDate.getTime() };
 }
 
+/** True only for a canonical ISO week key: `YYYY-Www` whose Monday round-trips back to the same key.
+ * Rejects malformed (`2026-W1`), out-of-range (`2026-W99`), and non-existent (`2026-W53` in a
+ * 52-week year) inputs, so a weekly entry can't be stored under an id a later read won't find. */
+export function isValidIsoWeek(key: string): boolean {
+  if (!/^\d{4}-W\d{2}$/.test(key)) return false;
+  const { start } = weekRange(key);
+  return !Number.isNaN(start) && isoWeekOf(start) === key;
+}
+
 /** Hold-time bucket for the "by hold-time" breakdown. The documented, gapless contract is
  * `intraday` (<1d), `2-5d` (1d–<6d), `1-2w` (6d–<15d), `2w+` (≥15d), `open` (still-open). */
 export function holdBucket(holdSeconds: number | null): string {

@@ -123,6 +123,17 @@ test("weekly entry GET/PUT round-trips and lists that week's trades", async () =
   expect(Array.isArray(got.trades)).toBe(true);
 });
 
+test("weekly endpoint rejects a non-canonical ISO week key (400, no row stored)", async () => {
+  const { app } = await api();
+  const bad = await app(
+    new Request("http://x/api/journal/weeks/2026-W99", {
+      method: "PUT",
+      body: JSON.stringify({ marketRead: "x", watchlist: [] }),
+    }),
+  );
+  expect(bad.status).toBe(400);
+});
+
 test("POST /api/sync starts (202) then refuses a concurrent start (409); status is readable", async () => {
   const db = new Database(":memory:");
   runMigrations(db);

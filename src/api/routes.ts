@@ -6,7 +6,7 @@ import type { CandleSource } from "../domain/ports";
 import type { RuleConfig, Trade } from "../domain/types";
 import { computeStats, breakdown } from "../core/analytics";
 import { allTrades, flagsForTrade } from "../store/repos";
-import { holdBucket, isoWeekOf, weekRange } from "../domain/time";
+import { holdBucket, isValidIsoWeek, weekRange } from "../domain/time";
 import type { Journal, WatchlistItem } from "../domain/journal-types";
 import {
   getWeeklyEntry,
@@ -217,8 +217,8 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
       // /api/journal/weeks/:isoWeek  (GET + PUT); trades are associated by date at read time.
       if (seg.length === 4 && seg[1] === "journal" && seg[2] === "weeks") {
         const isoWeek = decodeURIComponent(seg[3]!);
+        if (!isValidIsoWeek(isoWeek)) return json({ error: "bad ISO week (want canonical YYYY-Www)" }, 400);
         const { start, end } = weekRange(isoWeek);
-        if (Number.isNaN(start)) return json({ error: "bad ISO week" }, 400);
         if (method === "PUT") {
           const b = (await req.json()) as any;
           const watchlist: WatchlistItem[] = Array.isArray(b.watchlist)

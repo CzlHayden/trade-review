@@ -66,6 +66,15 @@ test("two DISJOINT ranges do not mark the gap between them as covered", async ()
   // A request spanning the GAP between A and B must refetch (not be served as falsely covered).
   await c.getCandles("US.AAPL", 10 * DAY, 12 * DAY, DAY);
   expect(hits).toBe(3);
+  // But BOTH disjoint windows stay covered (multi-interval): with the source down, range A is still
+  // served from cache — its coverage wasn't overwritten by range B.
+  const bad = {
+    getCandles: async () => {
+      throw new Error("down");
+    },
+  };
+  const a = await cachedCandles(d, bad, { now }).getCandles("US.AAPL", 1 * DAY, 3 * DAY, DAY);
+  expect(a.length).toBeGreaterThan(0);
 });
 
 test("source failure with a warm cache still returns cached bars", async () => {

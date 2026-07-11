@@ -127,6 +127,20 @@ export const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
       );
     `);
   },
+  // v5 — candle_coverage becomes MULTI-INTERVAL: PK (symbol,res_ms,from_ms) so two disjoint fetched
+  // windows for the same symbol coexist instead of one overwriting the other. Coverage is a pure
+  // cache index (bars live in candles_cache), so dropping/recreating it only re-accumulates on the
+  // next fetch — never loses candles.
+  (db) => {
+    db.run(`DROP TABLE IF EXISTS candle_coverage;`);
+    db.run(`
+      CREATE TABLE candle_coverage (
+        symbol TEXT NOT NULL, res_ms INTEGER NOT NULL,
+        from_ms INTEGER NOT NULL, to_ms INTEGER NOT NULL, fetched_at INTEGER NOT NULL,
+        PRIMARY KEY (symbol, res_ms, from_ms)
+      );
+    `);
+  },
 ];
 
 export function currentVersion(db: Database): number {
