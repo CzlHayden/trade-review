@@ -9,6 +9,7 @@ import { allTrades, flagsForTrade } from "../store/repos";
 import { holdBucket, isValidIsoWeek, weekRange } from "../domain/time";
 import type { Journal, WatchlistItem } from "../domain/journal-types";
 import {
+  getJournal,
   getWeeklyEntry,
   tradesInRange,
   upsertJournal,
@@ -103,6 +104,14 @@ function validScore(v: unknown): boolean {
   return v == null || (typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 5);
 }
 
+/** Order-insensitive equality of two tag lists (getJournal returns tags sorted; a request may not). */
+function tagsEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const as = [...a].sort();
+  const bs = [...b].sort();
+  return as.every((t, i) => t === bs[i]);
+}
+
 /** Parse a JSON request body, requiring a non-null, non-array object. Returns `null` on malformed
  * JSON or a non-object body so the caller can 400 instead of 500-ing (or silently null-overwriting). */
 async function readJsonObject(req: Request): Promise<Record<string, unknown> | null> {
@@ -171,6 +180,11 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
           if (!validScore(b.conviction) || !validScore(b.rating)) {
             return json({ error: "conviction/rating must be an integer 1..5 or null" }, 400);
           }
+          // Reject a wrong-typed manual stop (e.g. the string "95" from an HTML input) rather than
+          // coercing it to null — that would SILENTLY CLEAR the authoritative risk basis on a 200.
+          if (b.manualStop != null && typeof b.manualStop !== "number") {
+            return json({ error: "manualStop must be a number or null" }, 400);
+          }
           const journal: Journal = {
             tradeId: id,
             thesis: b.thesis ?? null,
@@ -183,13 +197,23 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
             tags: Array.isArray(b.tags) ? b.tags.map(String) : [],
             updatedAt: deps.now(),
           };
+          // Only manualStop/setup/tags feed derived data (risk/R/flags, breakdown keys); thesis/notes/
+          // emotion/conviction/rating do not. Rebuild ONLY when a derived-affecting field changed, so a
+          // routine note/rating save doesn't walk every trade + refetch candles.
+          const prev = getJournal(db, id);
+          const derivedChanged = prev
+            ? prev.manualStop !== journal.manualStop ||
+              prev.setup !== journal.setup ||
+              !tagsEqual(prev.tags, journal.tags)
+            : journal.manualStop !== null || journal.setup !== null || journal.tags.length > 0;
           upsertJournal(db, journal);
-          // Setup/tags feed breakdowns and a manual stop feeds risk/R/flags — re-derive through the
-          // single tested pipeline (no OpenD round-trip). Serialized with a running sync's rebuild via
-          // the shared lock so the two can't interleave and clobber each other's derived rows.
-          await rebuildLock.runExclusive(() =>
-            rebuildDerived(db, { candles: deps.candles, config: deps.config, now: deps.now() }),
-          );
+          if (derivedChanged) {
+            // Serialized with a running sync's rebuild via the shared lock so the two can't interleave
+            // and clobber each other's derived rows (no OpenD round-trip).
+            await rebuildLock.runExclusive(() =>
+              rebuildDerived(db, { candles: deps.candles, config: deps.config, now: deps.now() }),
+            );
+          }
           return json(tradeDetail(db, id));
         }
         if (seg.length === 4 && seg[3] === "candles" && method === "GET") {

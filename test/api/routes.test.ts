@@ -116,6 +116,53 @@ test("PUT journal rejects a non-object JSON body (null/array/string) with 400", 
   }
 });
 
+test("PUT journal rejects a wrong-typed manual stop (string) instead of silently clearing it", async () => {
+  const { app } = await api();
+  const id = ((await (await app(new Request("http://x/api/trades"))).json()) as any)[0].id;
+  // First set a real manual stop.
+  await app(
+    new Request(`http://x/api/trades/${id}/journal`, {
+      method: "PUT",
+      body: JSON.stringify({ manualStop: 95, tags: [] }),
+    }),
+  );
+  // A string manualStop must 400, not coerce to null and wipe the stop.
+  const res = await app(
+    new Request(`http://x/api/trades/${id}/journal`, {
+      method: "PUT",
+      body: JSON.stringify({ manualStop: "94", tags: [] }),
+    }),
+  );
+  expect(res.status).toBe(400);
+  const detail: any = await (await app(new Request(`http://x/api/trades/${id}`))).json();
+  expect(detail.journal.manualStop).toBe(95); // unchanged
+});
+
+test("a note-only journal edit does NOT trigger a rebuild (no candle fetches)", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  upsertRawFills(db, [
+    { id: "f1", orderId: "o1", symbol: "US.AAPL", side: "BUY", qty: 10, price: 100, fee: 0, currency: "USD", time: 1000, account: "a" },
+    { id: "f2", orderId: "o2", symbol: "US.AAPL", side: "SELL", qty: 10, price: 110, fee: 0, currency: "USD", time: 2000, account: "a" },
+  ]);
+  await rebuildDerived(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 3000 });
+  let fetches = 0;
+  const counting = {
+    getCandles: async () => {
+      fetches++;
+      return [];
+    },
+  };
+  const app = buildApi(db, { candles: counting, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 3000 });
+  const id = ((await (await app(new Request("http://x/api/trades"))).json()) as any)[0].id;
+
+  await app(new Request(`http://x/api/trades/${id}/journal`, { method: "PUT", body: JSON.stringify({ notes: "first", tags: [] }) }));
+  expect(fetches).toBe(0); // notes-only, no derived change → no rebuild → no candle fetch
+
+  await app(new Request(`http://x/api/trades/${id}/journal`, { method: "PUT", body: JSON.stringify({ manualStop: 95, tags: [] }) }));
+  expect(fetches).toBeGreaterThan(0); // manual stop changed → rebuild ran
+});
+
 test("PUT journal rejects out-of-range conviction", async () => {
   const { app } = await api();
   const id = ((await (await app(new Request("http://x/api/trades"))).json()) as any)[0].id;
