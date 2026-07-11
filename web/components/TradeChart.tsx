@@ -85,6 +85,8 @@ export function TradeChart({
   themeKey,
   savedDrawings,
   onDrawingsChange,
+  loading,
+  drawingsReady,
 }: {
   symbol: string;
   candles: Candle[];
@@ -98,11 +100,14 @@ export function TradeChart({
   themeKey: string;
   savedDrawings: Drawing[];
   onDrawingsChange: (d: Drawing[]) => void;
+  loading: boolean; // a res-switch refetch is in flight (keepPreviousData still shows the old res)
+  drawingsReady: boolean; // the saved-drawings query has settled — don't let a draw PUT before we load
 }) {
   const el = useRef<HTMLDivElement>(null);
   const chart = useRef<Chart | null>(null);
   const bars = useRef<KLineData[]>([]);
   const hydrating = useRef(false); // suppress persistence while we recreate saved overlays
+  const lastView = useRef<{ symbol: string; res: Res } | null>(null); // only re-fit on symbol/res change
   const onChange = useRef(onDrawingsChange);
   onChange.current = onDrawingsChange;
 
@@ -121,7 +126,30 @@ export function TradeChart({
     };
   }, []);
 
-  // Load data on candle/resolution change, then focus the trade window.
+  // Fit [from, to] into the viewport (shrink bar spacing so the whole trade shows on first paint),
+  // then pin the right edge. Guard the empty case — scrollToTimestamp indexes the bar list and
+  // throws on [] (unsupported market / Yahoo outage → ladder exhausts → candles []).
+  const fitAndScroll = (c: Chart, from: number, to: number) => {
+    if (bars.current.length === 0 || to <= 0) return;
+    // getSize needs the pane id ('candle_pane' — klinecharts doesn't export the constant); 'main' is
+    // the candle drawing area width, excluding the y-axis, which is what bar-space is measured against.
+    const width = c.getSize("candle_pane", "main")?.width ?? 0;
+    const barSpace = c.getBarSpace().bar;
+    const inFocus = bars.current.filter((b) => b.timestamp >= from && b.timestamp <= to).length;
+    // Only ZOOM OUT — and only when the trade (entry→exit + pad) wouldn't otherwise fit. Never zoom in
+    // past the default spacing: that would throw away the run-up context needed to judge the entry
+    // (the whole point of loading ~1yr of bars). A short trade keeps the wide default view; a long
+    // hold shrinks bar spacing just enough to keep its entry/initial-stop on screen.
+    if (inFocus > 1 && width > 0 && barSpace > 0 && inFocus > (width / barSpace) * 0.9) {
+      c.setBarSpace((width * 0.9) / inFocus);
+    }
+    c.scrollToTimestamp(to, 0);
+  };
+
+  // Reload the series on ANY candle change — including value-only updates with an unchanged bar count
+  // (today's bar after a sync, or a whole-series back-adjust after a split), which is why the deps
+  // fingerprint the first/last CLOSE, not just timestamps. Only re-fit the view when symbol/res
+  // actually changed, so a background refetch refreshes prices without yanking the user's pan/zoom.
   useEffect(() => {
     const c = chart.current;
     if (!c) return;
@@ -129,12 +157,20 @@ export function TradeChart({
     const precision = marks.avgEntry > 0 && marks.avgEntry < 1 ? 4 : 2; // sub-$1 tickers tick finer
     c.setSymbol({ ticker: symbol, pricePrecision: precision, volumePrecision: 0 });
     c.setPeriod(periodFor(res));
-    c.resetData();
-    // Guard the empty case: scrollToTimestamp indexes into the bar list and throws on []
-    // (unsupported market / Yahoo outage → ladder exhausts → candles []), which would blank the app.
-    if (bars.current.length > 0 && focusTo > 0) c.scrollToTimestamp(focusTo, 0);
+    c.resetData(); // forces a data-loader reload even when symbol+period are unchanged (value-only refetch)
+    const viewChanged = !lastView.current || lastView.current.symbol !== symbol || lastView.current.res !== res;
+    lastView.current = { symbol, res };
+    if (viewChanged) fitAndScroll(c, focusFrom, focusTo);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, res, candles.length, candles[0]?.time, candles[candles.length - 1]?.time]);
+  }, [
+    symbol,
+    res,
+    candles.length,
+    candles[0]?.time,
+    candles[candles.length - 1]?.time,
+    candles[0]?.close,
+    candles[candles.length - 1]?.close,
+  ]);
 
   // Serialize the user's drawings to our persistence shape (timestamp+value only; strip dataIndex).
   const persist = () => {
@@ -151,9 +187,9 @@ export function TradeChart({
     chart.current?.createOverlay({
       name,
       groupId: USER,
-      onDrawEnd: () => (persist(), false),
-      onPressedMoveEnd: () => (persist(), false),
-      onRemoved: () => (persist(), false),
+      onDrawEnd: () => persist(),
+      onPressedMoveEnd: () => persist(),
+      onRemoved: () => persist(),
     });
   };
 
@@ -209,9 +245,9 @@ export function TradeChart({
           name: d.name,
           groupId: USER,
           points: d.points,
-          onDrawEnd: () => (persist(), false),
-          onPressedMoveEnd: () => (persist(), false),
-          onRemoved: () => (persist(), false),
+          onDrawEnd: () => persist(),
+          onPressedMoveEnd: () => persist(),
+          onRemoved: () => persist(),
         });
       } catch {
         /* skip a malformed saved overlay */
@@ -238,14 +274,21 @@ export function TradeChart({
         {(["1d", "1h", "15m"] as Res[]).map(toggle)}
         <div style={{ width: 1, alignSelf: "stretch", background: "var(--border)", margin: "0 4px" }} />
         {TOOLS.map((t) => (
-          <button key={t.name} className="btn" style={{ padding: "2px 9px" }} onClick={() => startDraw(t.name)}>
+          <button
+            key={t.name}
+            className="btn"
+            style={{ padding: "2px 9px" }}
+            disabled={!drawingsReady}
+            title={drawingsReady ? undefined : "loading saved drawings…"}
+            onClick={() => startDraw(t.name)}
+          >
             {t.label}
           </button>
         ))}
-        <button className="btn" style={{ padding: "2px 9px" }} onClick={clearDrawings}>
+        <button className="btn" style={{ padding: "2px 9px" }} disabled={!drawingsReady} onClick={clearDrawings}>
           Clear
         </button>
-        {res !== requestedRes && (
+        {res !== requestedRes && !loading && (
           <span className="faint" style={{ fontSize: 11, alignSelf: "center" }}>
             no {requestedRes} data — showing {res}
           </span>

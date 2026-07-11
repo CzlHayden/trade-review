@@ -2,13 +2,14 @@ import { useMemo, useState, useRef, useEffect, type ReactNode } from "react";
 import { useTradeDetail, useCandles, useMeta, useTheme, useDrawings, usePutDrawings } from "../lib/hooks";
 import type { Drawing } from "../lib/api";
 import type { Res } from "../components/TradeChart";
-
-const NO_DRAWINGS: Drawing[] = []; // stable identity so the chart's hydrate effect doesn't re-run
-                                    // (and wipe fresh drawings) while the drawings query is unsettled
 import { money, price, pct, rMultiple, signClass, date, dateTime, holdTime, qty } from "../lib/format";
 import { FlagChips } from "../components/FlagChips";
 import { TradeChart } from "../components/TradeChart";
 import { JournalEditor } from "../components/JournalEditor";
+
+// Stable identity so the chart's hydrate effect doesn't re-run (and wipe fresh drawings) while the
+// drawings query is unsettled.
+const NO_DRAWINGS: Drawing[] = [];
 
 export function TradeDetail({ id }: { id: string }) {
   const { data, isLoading } = useTradeDetail(id);
@@ -100,6 +101,8 @@ export function TradeDetail({ id }: { id: string }) {
         themeKey={themeKey}
         savedDrawings={drawings.data?.drawings ?? NO_DRAWINGS}
         onDrawingsChange={onDrawingsChange}
+        loading={candles.isFetching}
+        drawingsReady={drawings.isSuccess}
       />
 
       <div className="kpi-row" style={{ marginTop: 12 }}>

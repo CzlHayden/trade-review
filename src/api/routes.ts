@@ -248,8 +248,15 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
               400,
             );
           }
+          // Sanitize each point down to {timestamp, value}: raw klinecharts points also carry a
+          // `dataIndex`, and if that were persisted the overlay would re-anchor by bar index after a
+          // resolution change (the exact drift the timestamp/value-only schema exists to prevent).
+          const sanitized: Drawing[] = b.drawings.map((d) => ({
+            name: d.name,
+            points: d.points.map((p) => ({ timestamp: p.timestamp, value: p.value })),
+          }));
           // Drawings are user annotations, not derived data — no rebuildDerived here.
-          upsertDrawings(db, id, b.drawings, deps.now());
+          upsertDrawings(db, id, sanitized, deps.now());
           return json({ drawings: getDrawings(db, id) });
         }
         if (seg.length === 4 && seg[3] === "candles" && method === "GET") {
@@ -258,16 +265,19 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
           let res = parseRes(url.searchParams.get("res"));
           let win = windowFor(trade.openTime, trade.closeTime, deps.now(), res);
           let bars: Awaited<ReturnType<CandleSource["getCandles"]>> = [];
-          // Coarsen-on-empty: an intraday res can legitimately come back empty (the trade predates
-          // Yahoo's retention at that resolution) — retry one step coarser before giving up, and
-          // report whichever res actually produced bars.
+          // Coarsen the resolution when the current one either comes back empty (the trade predates
+          // Yahoo's retention there) OR its window was clamped forward past the trade's entry (an old
+          // open/long trade: intraday reach can't reach back far enough, so Yahoo returns recent bars
+          // that miss the entry/initial-stop entirely). In both cases step one res coarser — 1d has no
+          // reach limit, so it always covers the entry and terminates the ladder.
           for (;;) {
             try {
               bars = await deps.candles.getCandles(trade.symbol, win.fromMs, win.toMs, win.resMs);
             } catch {
               bars = [];
             }
-            if (bars.length > 0) break;
+            const coversEntry = win.fromMs <= trade.openTime;
+            if (bars.length > 0 && coversEntry) break;
             const next = COARSER[res];
             if (!next) break;
             res = next;
