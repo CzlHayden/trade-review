@@ -2,6 +2,9 @@ import { useMemo, useState, useRef, useEffect, type ReactNode } from "react";
 import { useTradeDetail, useCandles, useMeta, useTheme, useDrawings, usePutDrawings } from "../lib/hooks";
 import type { Drawing } from "../lib/api";
 import type { Res } from "../components/TradeChart";
+
+const NO_DRAWINGS: Drawing[] = []; // stable identity so the chart's hydrate effect doesn't re-run
+                                    // (and wipe fresh drawings) while the drawings query is unsettled
 import { money, price, pct, rMultiple, signClass, date, dateTime, holdTime, qty } from "../lib/format";
 import { FlagChips } from "../components/FlagChips";
 import { TradeChart } from "../components/TradeChart";
@@ -35,8 +38,8 @@ export function TradeDetail({ id }: { id: string }) {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(flush, 500);
   };
-  // Stable marks identity so background refetches don't rerun the chart effect (which calls fitContent
-  // and would reset the user's zoom/pan). Keyed on the primitive fields the chart actually draws.
+  // Stable marks identity so background refetches don't rerun the chart's mark-drawing effect.
+  // Keyed on the primitive fields the chart actually draws.
   const marks = useMemo(
     () => ({
       avgEntry: t?.avgEntry ?? 0,
@@ -95,7 +98,7 @@ export function TradeDetail({ id }: { id: string }) {
         fills={fills}
         marks={marks}
         themeKey={themeKey}
-        savedDrawings={drawings.data?.drawings ?? []}
+        savedDrawings={drawings.data?.drawings ?? NO_DRAWINGS}
         onDrawingsChange={onDrawingsChange}
       />
 

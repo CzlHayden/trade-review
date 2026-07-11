@@ -12,7 +12,12 @@ export const useTradeDetail = (id: string) =>
   useQuery({ queryKey: ["trade", id], queryFn: () => api.trade(id), enabled: !!id });
 
 export const useCandles = (id: string, res: "1d" | "1h" | "15m" = "1d") =>
-  useQuery({ queryKey: ["candles", id, res], queryFn: () => api.candles(id, res), enabled: !!id });
+  useQuery({
+    queryKey: ["candles", id, res],
+    queryFn: () => api.candles(id, res),
+    enabled: !!id,
+    placeholderData: keepPreviousData, // don't blank the chart while a resolution switch refetches
+  });
 
 export const useDrawings = (id: string) =>
   useQuery({ queryKey: ["drawings", id], queryFn: () => api.drawings(id), enabled: !!id });

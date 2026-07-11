@@ -62,10 +62,11 @@ function toKline(c: Candle): KLineData {
 const MARKS = "marks"; // our locked trade marks
 const USER = "user"; // user drawings (persisted)
 
+// klinecharts v10 built-in OVERLAYS only (its `rect` is a figure, not an overlay — createOverlay
+// would no-op). Segment/horizontalStraightLine/fibonacciLine are real overlay templates.
 const TOOLS: Array<{ name: string; label: string }> = [
   { name: "segment", label: "Line" },
   { name: "horizontalStraightLine", label: "H-line" },
-  { name: "rect", label: "Box" },
   { name: "fibonacciLine", label: "Fib" },
 ];
 
@@ -125,10 +126,13 @@ export function TradeChart({
     const c = chart.current;
     if (!c) return;
     bars.current = candles.map(toKline).sort((a, b) => a.timestamp - b.timestamp);
-    c.setSymbol({ ticker: symbol, pricePrecision: 2, volumePrecision: 0 });
+    const precision = marks.avgEntry > 0 && marks.avgEntry < 1 ? 4 : 2; // sub-$1 tickers tick finer
+    c.setSymbol({ ticker: symbol, pricePrecision: precision, volumePrecision: 0 });
     c.setPeriod(periodFor(res));
     c.resetData();
-    if (focusTo > 0) c.scrollToTimestamp(focusTo, 0);
+    // Guard the empty case: scrollToTimestamp indexes into the bar list and throws on []
+    // (unsupported market / Yahoo outage → ladder exhausts → candles []), which would blank the app.
+    if (bars.current.length > 0 && focusTo > 0) c.scrollToTimestamp(focusTo, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, res, candles.length, candles[0]?.time, candles[candles.length - 1]?.time]);
 

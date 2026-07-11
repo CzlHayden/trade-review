@@ -79,3 +79,16 @@ test("toMs default 1d pad has a floor for a short trade window", () => {
   const w = windowFor(openTime, closeTime, NOW, "1d");
   expect(w.toMs - closeTime).toBeGreaterThanOrEqual(2 * DAY - 1); // ~2 day min pad
 });
+
+test("never inverts the window: a trade older than the intraday reach collapses, not fromMs>toMs", () => {
+  // Trade fully older than 1h reach (~720d): openTime 800d ago, closed 799d ago.
+  const openTime = NOW - 800 * DAY;
+  const closeTime = NOW - 799 * DAY;
+  for (const res of ["1h", "15m"] as const) {
+    const w = windowFor(openTime, closeTime, NOW, res);
+    expect(w.fromMs).toBeLessThanOrEqual(w.toMs); // invariant: never inverted
+    expect(w.focusFrom).toBeLessThanOrEqual(w.focusTo);
+    expect(w.focusFrom).toBeGreaterThanOrEqual(w.fromMs);
+    expect(w.focusTo).toBeLessThanOrEqual(w.toMs);
+  }
+});

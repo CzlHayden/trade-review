@@ -41,11 +41,18 @@ export function windowFor(openTime: number, closeTime: number | null, now: numbe
 
   const reach = REACH_MS[res];
   if (reach !== undefined) fromMs = Math.max(fromMs, now - reach);
+  // A trade entirely older than the intraday reach clamps fromMs forward past toMs; collapse rather
+  // than invert (the route's coarsen-on-empty ladder then falls back to 1d, which has no reach limit).
+  if (fromMs > toMs) toMs = fromMs;
 
   const focusPad = Math.max(span * 0.1, DAY_MS);
   // Clamped into [fromMs, toMs]: the initial visible range can never exceed the loaded data.
-  const focusFrom = Math.max(openTime - focusPad, fromMs);
-  const focusTo = Math.min(end + focusPad, toMs);
+  let focusFrom = Math.max(openTime - focusPad, fromMs);
+  let focusTo = Math.min(end + focusPad, toMs);
+  // A trade entirely older than the resolution's reach leaves `end` before `fromMs`, so the clamps
+  // above can cross (focusFrom pinned up to fromMs, focusTo pinned down to toMs<focusFrom). Collapse
+  // to the newest loaded edge rather than hand back an inverted range.
+  if (focusFrom > focusTo) focusFrom = focusTo = toMs;
 
   return { res, resMs, fromMs, toMs, focusFrom, focusTo };
 }
