@@ -53,6 +53,27 @@ test("open trade (closeTime null) uses now as the end for toMs padding", () => {
   expect(fifteenRes.toMs).toBe(NOW + DAY);
 });
 
+test("closed trade extends the forward window to now (post-trade context), view stays on the trade", () => {
+  const openTime = NOW - 40 * DAY;
+  const closeTime = NOW - 30 * DAY;
+  for (const res of ["1d", "1wk", "1mo", "3mo"] as const) {
+    const w = windowFor(openTime, closeTime, NOW, res);
+    expect(w.toMs).toBeGreaterThanOrEqual(NOW); // loads up to today, not just a few bars past the close
+    expect(w.focusTo).toBeLessThan(NOW); // but first paint is still centered on the trade, not on today
+    expect(w.focusTo).toBeGreaterThanOrEqual(closeTime);
+  }
+});
+
+test("closed intraday trade within reach also loads forward to now", () => {
+  const openTime = NOW - 5 * DAY;
+  const closeTime = NOW - 4 * DAY;
+  for (const res of ["1h", "15m"] as const) {
+    const w = windowFor(openTime, closeTime, NOW, res);
+    expect(w.toMs).toBeGreaterThanOrEqual(NOW);
+    expect(w.focusTo).toBeGreaterThanOrEqual(closeTime);
+  }
+});
+
 test("focusFrom/focusTo bracket the trade window and sit inside [fromMs, toMs]", () => {
   for (const res of ["1d", "1h", "15m"] as const) {
     const openTime = NOW - 15 * DAY;

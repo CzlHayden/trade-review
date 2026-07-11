@@ -40,7 +40,9 @@ const LOOKBACK_MS: Record<Res, number> = {
   "3mo": 25 * YEAR_MS,
 };
 
-// Minimum pad AFTER the trade closes (a few bars of breathing room), per resolution.
+// Minimum pad AFTER the trade closes (a few bars of breathing room), per resolution. This is only the
+// FLOOR: the window is also always extended forward to `now` (see windowFor) so post-trade price
+// action is reviewable — the tail matters only for an open trade or one that closed moments ago.
 const MIN_TAIL_MS: Record<Res, number> = {
   "15m": DAY_MS,
   "1h": 2 * DAY_MS,
@@ -67,12 +69,18 @@ export function windowFor(openTime: number, closeTime: number | null, now: numbe
   const tail = reach !== undefined ? MIN_TAIL_MS[res] : Math.max(span * 0.05, MIN_TAIL_MS[res]);
 
   let fromMs = openTime - LOOKBACK_MS[res];
-  let toMs = end + tail;
-
   if (reach !== undefined) fromMs = Math.max(fromMs, now - reach);
-  // A trade entirely older than the intraday reach clamps fromMs forward past toMs; collapse rather
-  // than invert (the route's coarsen-on-empty ladder then falls back to 1d, which has no reach limit).
-  if (fromMs > toMs) toMs = fromMs;
+
+  // Load forward all the way to `now`, not just a few bars past the close: reviewing a trade means
+  // seeing what price did AFTER the exit (did it keep running, did the stop save you). `end + tail`
+  // is only a floor for an open/just-closed trade. The initial view still centers on the trade
+  // (focusFrom/focusTo below), so the extra bars are there to scroll into, not zoomed away.
+  let toMs = Math.max(end + tail, now);
+  // A trade entirely older than the intraday reach: its close is before the clamped-forward fromMs,
+  // so there is no in-reach data for it. Collapse to an empty window rather than load 720d/58d of
+  // unrelated recent bars — the route's coarsen-on-empty ladder then falls back to 1d (no reach limit).
+  if (reach !== undefined && end < fromMs) toMs = fromMs;
+  if (fromMs > toMs) toMs = fromMs; // safety: never invert
 
   const focusPad = Math.max(span * 0.1, DAY_MS);
   // Clamped into [fromMs, toMs]: the initial visible range can never exceed the loaded data.
