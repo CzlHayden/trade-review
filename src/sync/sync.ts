@@ -31,7 +31,7 @@ import {
 } from "../store/repos";
 import { manualStops } from "../store/journal";
 import { LAST_SNAPSHOT_TIME, setConfigValue } from "../store/config";
-import { getSyncState, upsertSyncState } from "../store/sync-state";
+import { coverageFloor, getSyncState, upsertSyncState } from "../store/sync-state";
 
 const DAY_MS = 86_400_000;
 const PAD_MS = 2 * DAY_MS; // context padding around the trade window for candles
@@ -222,7 +222,12 @@ export async function rebuildDerived(
   // deriveSeeds. snapshotClock backfills the latest stored snapshot for a pre-marker (migrated) DB,
   // and falls back to `now` only before the first sync (no snapshot, no fills → no seeds).
   const snapTime = snapshotClock(db, now);
-  const seeds = deriveSeeds(allFills, positionsAt(db, snapTime), snapTime);
+  // Seed TIME (used in a seed-only trade's deterministic id) must be STABLE across syncs, else a
+  // never-traded pre-window holding gets a new id each sync and orphans its journal/manual stop. Use
+  // the fixed coverage floor, not the ever-advancing snapshot clock. (Positions with in-window fills
+  // take their first fill time inside deriveSeeds; this fallback only bites pure seed-only holdings.)
+  const seedTime = coverageFloor(db) ?? snapTime;
+  const seeds = deriveSeeds(allFills, positionsAt(db, snapTime), seedTime);
   const built = buildTrades(allFills, seeds).sort(
     (a, b) => a.openTime - b.openTime || a.id.localeCompare(b.id),
   );

@@ -103,6 +103,19 @@ function validScore(v: unknown): boolean {
   return v == null || (typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 5);
 }
 
+/** Parse a JSON request body, requiring a non-null, non-array object. Returns `null` on malformed
+ * JSON or a non-object body so the caller can 400 instead of 500-ing (or silently null-overwriting). */
+async function readJsonObject(req: Request): Promise<Record<string, unknown> | null> {
+  let b: unknown;
+  try {
+    b = await req.json();
+  } catch {
+    return null;
+  }
+  if (b === null || typeof b !== "object" || Array.isArray(b)) return null;
+  return b as Record<string, unknown>;
+}
+
 /** Group open positions per currency so the wire shape can't be summed across currencies. */
 function positionsByCurrency(positions: OpenPosition[]) {
   const groups = new Map<string, OpenPosition[]>();
@@ -153,12 +166,8 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
           if (!allTrades(db).some((t) => t.id === id)) {
             return json({ error: "trade not found" }, 404);
           }
-          let b: any;
-          try {
-            b = await req.json();
-          } catch {
-            return json({ error: "invalid JSON body" }, 400);
-          }
+          const b = (await readJsonObject(req)) as any;
+          if (!b) return json({ error: "body must be a JSON object" }, 400);
           if (!validScore(b.conviction) || !validScore(b.rating)) {
             return json({ error: "conviction/rating must be an integer 1..5 or null" }, 400);
           }
@@ -225,12 +234,8 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
         if (!isValidIsoWeek(isoWeek)) return json({ error: "bad ISO week (want canonical YYYY-Www)" }, 400);
         const { start, end } = weekRange(isoWeek);
         if (method === "PUT") {
-          let b: any;
-          try {
-            b = await req.json();
-          } catch {
-            return json({ error: "invalid JSON body" }, 400);
-          }
+          const b = (await readJsonObject(req)) as any;
+          if (!b) return json({ error: "body must be a JSON object" }, 400);
           const watchlist: WatchlistItem[] = Array.isArray(b.watchlist)
             ? b.watchlist.map((w: any) => ({
                 symbol: String(w.symbol),

@@ -5,6 +5,7 @@ import { rebuildDerived } from "../../src/sync/sync";
 import { allTrades, insertPositionSnapshot, upsertRawFills } from "../../src/store/repos";
 import { upsertJournal } from "../../src/store/journal";
 import { setConfigValue, LAST_SNAPSHOT_TIME } from "../../src/store/config";
+import { upsertSyncState } from "../../src/store/sync-state";
 import { DEFAULT_RULE_CONFIG } from "../../src/domain/types";
 
 const noCandles = { getCandles: async () => [] };
@@ -67,4 +68,28 @@ test("a standalone rebuild reconciles seeds against the snapshot MARKER, not wal
   expect(trades[0]!.status).toBe("open");
   expect(trades[0]!.coverageOk).toBe(false);
   expect(trades[0]!.maxQty).toBe(10);
+});
+
+test("a seed-only holding keeps a STABLE trade id across syncs (journal never orphans)", async () => {
+  // A pre-window position never traded in-window (no fills). Its seed time must be the stable
+  // coverage floor, not the advancing snapshot clock — otherwise its id changes each sync.
+  const db = new Database(":memory:");
+  runMigrations(db);
+  upsertSyncState(db, { account: "a", market: "US", lastSyncedTime: 1000, coverageStart: 500 });
+  insertPositionSnapshot(db, [
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, currency: "USD", time: 1000 },
+  ]);
+  setConfigValue(db, LAST_SNAPSHOT_TIME, "1000");
+  await rebuildDerived(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 1000 });
+  const idA = allTrades(db)[0]!.id;
+
+  // Next sync advances the snapshot clock; the seed-only holding is unchanged.
+  setConfigValue(db, LAST_SNAPSHOT_TIME, "9999999");
+  insertPositionSnapshot(db, [
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, currency: "USD", time: 9999999 },
+  ]);
+  await rebuildDerived(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 9999999 });
+  const idB = allTrades(db)[0]!.id;
+
+  expect(idB).toBe(idA); // stable id ⇒ a journal keyed to idA stays attached
 });

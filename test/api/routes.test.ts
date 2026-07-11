@@ -105,6 +105,17 @@ test("PUT journal with a manual stop recomputes R via rebuild", async () => {
   expect(detail.journal.setup).toBe("breakout");
 });
 
+test("PUT journal rejects a non-object JSON body (null/array/string) with 400", async () => {
+  const { app } = await api();
+  const id = ((await (await app(new Request("http://x/api/trades"))).json()) as any)[0].id;
+  for (const body of ["null", "[]", '"hi"', "not json"]) {
+    const res = await app(
+      new Request(`http://x/api/trades/${id}/journal`, { method: "PUT", body }),
+    );
+    expect(res.status).toBe(400);
+  }
+});
+
 test("PUT journal rejects out-of-range conviction", async () => {
   const { app } = await api();
   const id = ((await (await app(new Request("http://x/api/trades"))).json()) as any)[0].id;
