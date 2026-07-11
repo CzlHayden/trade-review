@@ -20,7 +20,15 @@ function openBrowser(url: string): void {
   const cmd =
     process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
   try {
-    spawn(cmd, [url], { stdio: "ignore", detached: true, shell: process.platform === "win32" }).unref();
+    const child = spawn(cmd, [url], {
+      stdio: "ignore",
+      detached: true,
+      shell: process.platform === "win32",
+    });
+    // A missing opener (e.g. headless Linux with no xdg-open) emits an ASYNC 'error' event after
+    // spawn returns — the try/catch can't see it, and an unhandled 'error' would crash the process.
+    child.on("error", () => {}); // best-effort: the URL is printed to the console regardless
+    child.unref();
   } catch {
     // best-effort: the URL is printed to the console regardless
   }

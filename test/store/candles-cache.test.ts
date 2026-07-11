@@ -77,6 +77,22 @@ test("two DISJOINT ranges do not mark the gap between them as covered", async ()
   expect(a.length).toBeGreaterThan(0);
 });
 
+test("a near-now fetch is NOT recorded as covered past the closed boundary (no stale partial bar)", async () => {
+  const d = db();
+  const now = 100 * DAY;
+  const good = { getCandles: async (_s: string, from: number, to: number) => bars([from, to]) };
+  await cachedCandles(d, good, { now }).getCandles("US.AAPL", 97 * DAY, 100 * DAY, DAY); // ends in tail
+  // A later run (now advanced well past the tail) with the source down must NOT serve the tail from
+  // stale coverage — the near-now portion was never marked covered, so it degrades to [].
+  const bad = {
+    getCandles: async () => {
+      throw new Error("down");
+    },
+  };
+  const out = await cachedCandles(d, bad, { now: 200 * DAY }).getCandles("US.AAPL", 97 * DAY, 100 * DAY, DAY);
+  expect(out).toEqual([]);
+});
+
 test("source failure with a warm cache still returns cached bars", async () => {
   const d = db();
   const now = 100 * DAY;

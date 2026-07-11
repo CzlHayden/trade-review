@@ -103,7 +103,12 @@ export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpt
       }
       if (fresh.length) {
         writeBars(db, symbol, resMs, fresh);
-        addCoverage(db, symbol, resMs, fromMs, toMs, opts.now);
+        // Record coverage only up to the CLOSED boundary. A near-now fetch may include a partial
+        // current bar; marking [from,to] fully covered would later (once now advances past the tail)
+        // serve that stale partial bar without refetching. Capping coverage at now−TAIL forces the
+        // tail to refetch until its bars close. The just-fetched bars are still returned to this caller.
+        const coverEnd = Math.min(toMs, opts.now - TAIL_MS);
+        if (coverEnd > fromMs) addCoverage(db, symbol, resMs, fromMs, coverEnd, opts.now);
         return readBars(db, symbol, resMs, fromMs, toMs);
       }
       // Empty fresh response — the live source degrades fetch/parse failures to [] (it doesn't throw),
