@@ -60,10 +60,15 @@ export function windowFor(openTime: number, closeTime: number | null, now: numbe
   const end = closeTime ?? now;
   const span = Math.max(end - openTime, 0);
 
-  let fromMs = openTime - LOOKBACK_MS[res];
-  let toMs = end + Math.max(span * 0.05, MIN_TAIL_MS[res]);
-
   const reach = REACH_MS[res];
+  // Intraday (reach-limited) keeps a fixed tail; daily and coarser scale the tail with the trade span
+  // (a multi-year hold wants more breathing room after the close). This preserves the exact 1d/1h/15m
+  // windows from before the higher timeframes were added.
+  const tail = reach !== undefined ? MIN_TAIL_MS[res] : Math.max(span * 0.05, MIN_TAIL_MS[res]);
+
+  let fromMs = openTime - LOOKBACK_MS[res];
+  let toMs = end + tail;
+
   if (reach !== undefined) fromMs = Math.max(fromMs, now - reach);
   // A trade entirely older than the intraday reach clamps fromMs forward past toMs; collapse rather
   // than invert (the route's coarsen-on-empty ladder then falls back to 1d, which has no reach limit).
