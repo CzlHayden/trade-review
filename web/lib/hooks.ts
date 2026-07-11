@@ -1,0 +1,127 @@
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { api } from "./api";
+
+export const useStats = () => useQuery({ queryKey: ["stats"], queryFn: api.stats });
+export const useTrades = () => useQuery({ queryKey: ["trades"], queryFn: api.trades });
+export const useMeta = () => useQuery({ queryKey: ["meta"], queryFn: api.meta });
+export const usePositions = () => useQuery({ queryKey: ["positions"], queryFn: api.positions });
+export const useBreakdowns = (by: string) =>
+  useQuery({ queryKey: ["breakdowns", by], queryFn: () => api.breakdowns(by), placeholderData: keepPreviousData });
+export const useTradeDetail = (id: string) =>
+  useQuery({ queryKey: ["trade", id], queryFn: () => api.trade(id), enabled: !!id });
+
+export const useCandles = (id: string, res: "day" | "hour") =>
+  useQuery({ queryKey: ["candles", id, res], queryFn: () => api.candles(id, res), enabled: !!id });
+
+/** Save a trade's journal. A manual-stop/setup/tags change re-derives on the server, so invalidate
+ * everything that depends on derived data (this trade + all list/stat/breakdown queries). */
+export function usePutJournal(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => api.putJournal(id, body),
+    onSuccess: (detail) => {
+      qc.setQueryData(["trade", id], detail);
+      // A manual-stop change re-derives risk/R/flags AND the open-trade stop that Positions shows,
+      // plus per-week trade rows — invalidate all of them, not just the lists.
+      for (const key of ["trades", "stats", "breakdowns", "meta", "positions", "week"]) {
+        qc.invalidateQueries({ queryKey: [key] });
+      }
+    },
+  });
+}
+
+/** Poll sync status only while a sync is running; when it flips to done, invalidate everything so
+ * the whole app refetches the freshly-synced data (one place, not a manual refetch cascade). */
+export function useSyncStatus() {
+  const qc = useQueryClient();
+  const [wasRunning, setWasRunning] = useState(false);
+  const q = useQuery({
+    queryKey: ["syncStatus"],
+    queryFn: api.syncStatus,
+    refetchInterval: (query) => (query.state.data?.running ? 1200 : false),
+  });
+  useEffect(() => {
+    const running = q.data?.running ?? false;
+    if (wasRunning && !running) {
+      // Sync just finished → refresh EVERY data-bearing query so a mounted detail/positions/weekly
+      // page reflects re-synced data (["trades"] does not prefix-match ["trade", id]/["candles",…]).
+      for (const key of ["stats", "trades", "trade", "candles", "positions", "meta", "breakdowns", "week"]) {
+        qc.invalidateQueries({ queryKey: [key] });
+      }
+    }
+    setWasRunning(running);
+  }, [q.data?.running, wasRunning, qc]);
+  return q;
+}
+
+export const useWeek = (isoWeek: string) =>
+  useQuery({ queryKey: ["week", isoWeek], queryFn: () => api.week(isoWeek), enabled: !!isoWeek });
+
+export function usePutWeek(isoWeek: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => api.putWeek(isoWeek, body),
+    onSuccess: (view) => qc.setQueryData(["week", isoWeek], view),
+  });
+}
+
+export function useStartSync() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.startSync,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["syncStatus"] }),
+  });
+}
+
+// ---- theme (shared external store) ----
+export type ThemeMode = "light" | "dark" | "system";
+
+// A single app-wide theme so the header toggle re-themes EVERY mounted component (esp. the canvas
+// charts, which sample resolved CSS colors on `themeKey` change) — a per-component useState would
+// only update the toggle's own instance.
+let themeMode: ThemeMode = ((): ThemeMode => {
+  const v = typeof localStorage !== "undefined" ? localStorage.getItem("theme") : null;
+  return v === "light" || v === "dark" ? v : "system";
+})();
+const themeListeners = new Set<() => void>();
+
+function applyTheme() {
+  const root = document.documentElement;
+  if (themeMode === "system") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", themeMode);
+}
+applyTheme();
+
+/** Resolved-theme snapshot: changes on toggle AND on OS scheme change while in "system" — so charts
+ * re-theme in both cases. The mode is the prefix before "|". */
+function themeSnapshot(): string {
+  const dark =
+    themeMode === "dark" ||
+    (themeMode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  return `${themeMode}|${dark ? "d" : "l"}`;
+}
+function subscribeTheme(cb: () => void): () => void {
+  themeListeners.add(cb);
+  return () => themeListeners.delete(cb);
+}
+function notifyTheme() {
+  for (const l of themeListeners) l();
+}
+if (typeof window !== "undefined") {
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", notifyTheme);
+}
+
+export function setThemeMode(m: ThemeMode): void {
+  themeMode = m;
+  if (typeof localStorage !== "undefined") localStorage.setItem("theme", m);
+  applyTheme();
+  notifyTheme();
+}
+
+/** Returns { mode, themeKey, setMode }. `mode` drives the toggle glyph; `themeKey` (resolved) is what
+ * chart components watch to re-apply colors. */
+export function useTheme(): { mode: ThemeMode; themeKey: string; setMode: (m: ThemeMode) => void } {
+  const snap = useSyncExternalStore(subscribeTheme, themeSnapshot, themeSnapshot);
+  return { mode: snap.split("|")[0] as ThemeMode, themeKey: snap, setMode: setThemeMode };
+}

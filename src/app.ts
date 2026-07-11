@@ -10,11 +10,13 @@ import { getRuleConfig } from "./store/config";
 import { cachedCandles } from "./store/candles-cache";
 import { yahooCandles } from "./candles/yahoo";
 import { buildApi } from "./api/routes";
-import { serveStatic } from "./api/static";
 import { SyncRunner } from "./api/sync-runner";
 import { Mutex } from "./api/mutex";
 import { runSync, type SyncResult } from "./sync/sync";
 import { connectFutu } from "./futu/client";
+// Bun fullstack HTML import: Bun bundles the referenced React/TS/CSS in dev (with HMR) and EMBEDS the
+// built assets under `bun build --compile`. This is what replaces a separate Vite toolchain.
+import index from "../web/index.html";
 
 function openBrowser(url: string): void {
   const cmd =
@@ -70,11 +72,13 @@ export function main(): void {
   const server = Bun.serve({
     hostname: "127.0.0.1", // localhost bind is the entire security model (single local user)
     port: Number(process.env.PORT ?? 8123),
-    async fetch(req) {
-      const url = new URL(req.url);
-      // Include the bare "/api" so a probe there gets the API's JSON 404, not the SPA shell.
-      if (url.pathname === "/api" || url.pathname.startsWith("/api/")) return api(req);
-      return (await serveStatic(req)) ?? new Response("Not found", { status: 404 });
+    development: process.env.NODE_ENV !== "production", // HMR + rich errors for `bun run`; off in the binary
+    routes: {
+      // Most-specific first: API paths hit the JSON handler; everything else serves the bundled SPA
+      // (index.html), which is the SPA's own history-mode fallback.
+      "/api/*": (req) => api(req),
+      "/api": (req) => api(req),
+      "/*": index,
     },
   });
 
