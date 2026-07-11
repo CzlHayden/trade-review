@@ -104,13 +104,13 @@ export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpt
       const nearNow = toMs >= closedBefore;
       if (covered && !nearNow) return readBars(db, symbol, resMs, fromMs, toMs);
 
-      // Fetch only what's missing. When the closed prefix [fromMs, closedBefore] is already cached,
-      // refetch just the live tail [closedBefore, toMs] rather than the whole window — so a window whose
-      // bounded post-trade context reaches the last couple of days (near-now) doesn't re-pull a year of
-      // immutable history on every view. The cached prefix is served and stitched with the fresh tail.
-      const closedEnd = Math.min(toMs, closedBefore);
-      const prefixCached = closedEnd <= fromMs || isCovered(ivs, fromMs, closedEnd);
-      const fetchFrom = nearNow && prefixCached ? Math.max(fromMs, closedBefore) : fromMs;
+      // Fetch only what's missing. Reuse whatever a single stored interval already covers starting at
+      // fromMs and refetch only the rest — the closed-but-not-yet-cached gap since the last view plus the
+      // live tail. Keying off the interval's ACTUAL end (not the current closed boundary) is what lets
+      // this engage as `now` advances between views; otherwise a window whose bounded post-trade context
+      // reaches the recent days would re-pull a year of immutable history on every single view.
+      const prefix = ivs.find((iv) => iv.from_ms <= fromMs && iv.to_ms >= fromMs);
+      const fetchFrom = prefix ? Math.min(prefix.to_ms, toMs) : fromMs;
 
       let fresh: Candle[] = [];
       try {
