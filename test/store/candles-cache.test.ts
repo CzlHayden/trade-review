@@ -49,6 +49,28 @@ test("a range ending near now refetches the tail (partial last bar)", async () =
   expect(hits).toBe(2);
 });
 
+test("a near-now window reuses its cached prefix and refetches only the gap — even as the clock advances", async () => {
+  const d = db();
+  let now = 100 * DAY; // LIVE clock: advances between views (the production shape, not a frozen instant)
+  const calls: Array<[number, number]> = [];
+  const src = {
+    getCandles: async (_s: string, from: number, to: number) => {
+      calls.push([from, to]);
+      return bars([from, to]);
+    },
+  };
+  const c = cachedCandles(d, src, { now: () => now });
+  // First view of a window reaching into the future (bounded post-trade context): cold, full fetch.
+  await c.getCandles("US.X", 1 * DAY, now + 30 * DAY, DAY);
+  now += 2 * DAY; // time passes between views
+  // Second view: the immutable prefix is served from cache; only the gap-since-last-view + tail is pulled.
+  await c.getCandles("US.X", 1 * DAY, now + 30 * DAY, DAY);
+  expect(calls.length).toBe(2);
+  expect(calls[0]![0]).toBe(1 * DAY); // first fetch spans from the window start
+  expect(calls[1]![0]).toBeGreaterThan(50 * DAY); // second starts near the prior covered end, not the start
+  expect(calls[1]![0]).toBeLessThan(100 * DAY);
+});
+
 test("two DISJOINT ranges do not mark the gap between them as covered", async () => {
   const d = db();
   let hits = 0;

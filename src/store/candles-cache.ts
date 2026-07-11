@@ -94,7 +94,8 @@ export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpt
   return {
     async getCandles(symbol, fromMs, toMs, resMs) {
       const now = typeof opts.now === "function" ? opts.now() : opts.now;
-      const covered = isCovered(intervals(db, symbol, resMs), fromMs, toMs);
+      const ivs = intervals(db, symbol, resMs);
+      const covered = isCovered(ivs, fromMs, toMs);
       // A bar starting at `t` isn't closed until `t + resMs <= now`, so the partial-bar tail is one
       // bar-width PLUS the fixed TAIL margin. This matters for weekly/monthly/quarterly, where a bar
       // stays in progress for up to 7/30/91 days — a fixed 2-day tail would cache a partial coarse bar
@@ -103,25 +104,41 @@ export function cachedCandles(db: Database, source: CandleSource, opts: CacheOpt
       const nearNow = toMs >= closedBefore;
       if (covered && !nearNow) return readBars(db, symbol, resMs, fromMs, toMs);
 
+      // Fetch only what's missing. Reuse whatever a single stored interval already covers starting at
+      // fromMs and refetch only the rest — the closed-but-not-yet-cached gap since the last view plus the
+      // live tail. Keying off the interval's ACTUAL end (not the current closed boundary) is what lets
+      // this engage as `now` advances between views; otherwise a window whose bounded post-trade context
+      // reaches the recent days would re-pull a year of immutable history on every single view.
+      const prefix = ivs.find((iv) => iv.from_ms <= fromMs && iv.to_ms >= fromMs);
+      const fetchFrom = prefix ? Math.min(prefix.to_ms, toMs) : fromMs;
+
       let fresh: Candle[] = [];
       try {
-        fresh = await source.getCandles(symbol, fromMs, toMs, resMs);
+        fresh = await source.getCandles(symbol, fetchFrom, toMs, resMs);
       } catch {
+        // Source down: serve only if a single stored interval FULLY covers the request — never a partial
+        // window, so a wrong excursion range can't reach MAE/MFE; otherwise degrade to [].
         return covered ? readBars(db, symbol, resMs, fromMs, toMs) : [];
       }
       if (fresh.length) {
         writeBars(db, symbol, resMs, fresh);
-        // Record coverage only up to the CLOSED boundary. A near-now fetch may include a partial
-        // current bar; marking [from,to] fully covered would later (once now advances past the tail)
-        // serve that stale partial bar without refetching. Capping coverage at the closed boundary
-        // (now − TAIL − one bar-width) forces the tail to refetch until its bars close. The just-fetched
+        // Record coverage only up to the CLOSED boundary, and only for the range we actually fetched. A
+        // near-now fetch may include a partial current bar; marking [from,to] fully covered would later
+        // (once now advances past the tail) serve that stale partial bar without refetching. Capping at
+        // the closed boundary (now − TAIL − one bar-width) forces the tail to refetch until it closes;
+        // a tail-only fetch adds no new coverage (the prefix's coverage already stands). The just-fetched
         // bars are still returned to this caller.
         const coverEnd = Math.min(toMs, closedBefore);
-        if (coverEnd > fromMs) addCoverage(db, symbol, resMs, fromMs, coverEnd, now);
+        if (coverEnd > fetchFrom) addCoverage(db, symbol, resMs, fetchFrom, coverEnd, now);
         return readBars(db, symbol, resMs, fromMs, toMs);
       }
-      // Empty fresh response — the live source degrades fetch/parse failures to [] (it doesn't throw),
-      // so treat it like the catch path: serve cache only if fully covered, else no bars.
+      // Empty fresh response. The live source degrades fetch/parse failures to [] (it doesn't throw), so
+      // empty is ambiguous with "a soft error hid real bars" — treat it like the catch path: serve cache
+      // only if a single interval FULLY covers the request, else []. Trade-off: a genuinely-empty tail (a
+      // market closure spanning the coverage boundary — a multi-day HK/CN holiday, or a halted/delisted
+      // symbol) blanks an otherwise-cached near-now chart until one new bar closes. That fails safe (no
+      // bars, never a truncated window that would corrupt MAE/MFE) and self-heals; serving the cached
+      // prefix on empty instead could feed a truncated window to the excursion math.
       return covered ? readBars(db, symbol, resMs, fromMs, toMs) : [];
     },
   };

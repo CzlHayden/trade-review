@@ -65,10 +65,9 @@ export function TradeDetail({ id }: { id: string }) {
       plannedStop: data?.journal?.manualStop ?? data?.stop?.initialStop ?? null, // the R basis
       effectiveStop: t?.effectiveStop ?? null,
       effectiveTp: t?.effectiveTp ?? null,
-      riskKnown: (t?.risk ?? null) !== null,
       direction: t?.direction ?? "LONG",
     }),
-    [t?.avgEntry, data?.journal?.manualStop, data?.stop?.initialStop, t?.effectiveStop, t?.effectiveTp, t?.risk, t?.direction],
+    [t?.avgEntry, data?.journal?.manualStop, data?.stop?.initialStop, t?.effectiveStop, t?.effectiveTp, t?.direction],
   );
 
   if (isLoading) return <div className="spinner">Loading…</div>;

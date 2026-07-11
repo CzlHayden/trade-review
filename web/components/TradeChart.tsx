@@ -1,11 +1,56 @@
 import { useEffect, useRef } from "react";
-import { init, dispose, type Chart, type KLineData } from "klinecharts";
+import { init, dispose, registerOverlay, type Chart, type KLineData } from "klinecharts";
 import type { Candle, RawFill, Drawing, Res } from "../lib/api";
 
+// FUTU-style fill marker: a filled B (buy) / S (sell) pill pinned at the EXACT fill price+time.
+// Registered once, globally. It's a single `text` figure — klinecharts' text figure already draws a
+// rounded, padded background behind the glyph (its default backgroundColor is klinecharts blue, which
+// is why the old markers looked blue). We recolor that background green/red per fill via the overlay's
+// `text` styles at create time (the channel klinecharts reliably honors). extendData.side picks the
+// letter. Each fill is its own pill at its own price, so two same-day exits (a partial + an overnight
+// sell) render as distinct markers instead of colliding the way the old bar-anchored annotation did.
+const FILL_OVERLAY = "tradeFill";
+let fillOverlayRegistered = false;
+function registerFillOverlay() {
+  if (fillOverlayRegistered) return;
+  fillOverlayRegistered = true;
+  registerOverlay({
+    name: FILL_OVERLAY,
+    totalStep: 2, // matches built-in single-point overlays (points + 1)
+    needDefaultPointFigure: false, // no draggable anchor dots — this is a locked, read-only mark
+    needDefaultXAxisFigure: false,
+    needDefaultYAxisFigure: false,
+    createPointFigures: ({ overlay, coordinates }) => {
+      const pt = coordinates[0];
+      if (!pt) return [];
+      const isBuy = (overlay.extendData as { side?: string } | undefined)?.side === "BUY";
+      return [
+        {
+          type: "text",
+          attrs: { x: pt.x, y: pt.y, text: isBuy ? "B" : "S", align: "center", baseline: "middle" },
+          ignoreEvent: true,
+        },
+      ];
+    },
+  });
+}
+registerFillOverlay();
+
+// Our theme colors are declared with CSS `light-dark(lightHex, darkHex)`. Reading the custom property
+// directly (getPropertyValue) returns that literal UNRESOLVED string — klinecharts can't parse it and
+// silently falls back to its own default palette (why the chart looked "off", esp. in light mode).
+// Resolve each var through a throwaway element instead: assigning it to a real color property and
+// reading the *computed* value forces light-dark() to collapse to a concrete rgb() for the active scheme.
 function themeColors() {
-  const cs = getComputedStyle(document.documentElement);
-  const v = (n: string, fallback: string) => cs.getPropertyValue(n).trim() || fallback;
-  return {
+  const probe = document.createElement("span");
+  probe.style.cssText = "position:absolute;visibility:hidden;pointer-events:none";
+  document.body.appendChild(probe);
+  const v = (n: string, fallback: string) => {
+    probe.style.color = "";
+    probe.style.color = `var(${n})`;
+    return getComputedStyle(probe).color || fallback;
+  };
+  const out = {
     text: v("--text-muted", "#888"),
     grid: v("--border", "#333"),
     up: v("--pos", "#26a69a"),
@@ -14,6 +59,8 @@ function themeColors() {
     warn: v("--warn", "#e0a341"),
     axis: v("--text-faint", "#777"),
   };
+  probe.remove();
+  return out;
 }
 
 export type { Res }; // re-exported for existing consumers (TradeDetail); canonical def in src/core/candle-res
@@ -63,10 +110,9 @@ function chartStyles(c: ReturnType<typeof themeColors>) {
 
 export interface ChartMarks {
   avgEntry: number;
-  plannedStop: number | null; // manual ?? initial — the R basis
-  effectiveStop: number | null; // last active/trailing stop
+  plannedStop: number | null; // manual ?? initial — the R basis (drawn dashed when it differs from the effective stop)
+  effectiveStop: number | null; // last active/trailing stop — the primary SL, drawn solid red
   effectiveTp: number | null;
-  riskKnown: boolean; // dash the planned stop when risk was not computed (seed/profit-side)
   direction: "LONG" | "SHORT";
 }
 
@@ -240,19 +286,79 @@ export function TradeChart({
         points: [{ value }],
         styles: { line: { color, style: dashed ? "dashed" : "solid", size: 1 } },
       });
-    line(marks.avgEntry, col.accent, true); // entry — blue
-    if (marks.plannedStop !== null) line(marks.plannedStop, col.down, !marks.riskKnown); // planned stop — red
-    if (marks.effectiveStop !== null && marks.effectiveStop !== marks.plannedStop)
-      line(marks.effectiveStop, col.warn, false); // effective stop — amber
-    if (marks.effectiveTp !== null) line(marks.effectiveTp, col.up, true); // tp — green
+    line(marks.avgEntry, col.accent, true); // entry — blue dashed
+    // Stop loss — always RED and easy to spot. The active/protective stop is a SOLID red line (the SL
+    // that was actually working); the planned stop (R basis), when it differs, is a fainter red dash.
+    if (marks.effectiveStop !== null) line(marks.effectiveStop, col.down, false); // active SL — solid red
+    if (marks.plannedStop !== null && marks.plannedStop !== marks.effectiveStop)
+      line(marks.plannedStop, col.down, true); // planned/risk-basis stop — red dashed
+    if (marks.effectiveTp !== null) line(marks.effectiveTp, col.up, true); // tp — green dashed
+    // Keep every mark on screen: widen the price axis so a stop below the candle range (or a TP above
+    // it) can't sit off the edge. createRange runs on every auto-scale, so the SL stays visible through
+    // pan/zoom. Linear (non-log) axis → realValue == value == displayValue, so mirror all fields.
+    const rangeMarks = [marks.avgEntry, marks.effectiveStop, marks.plannedStop, marks.effectiveTp].filter(
+      (v): v is number => v !== null && Number.isFinite(v) && v > 0,
+    );
+    c.overrideYAxis({
+      paneId: "candle_pane", // the price axis specifically — NOT the volume pane
+      createRange: ({ defaultRange }) => {
+        const dFrom = defaultRange.from;
+        const dTo = defaultRange.to;
+        // Only pull a mark into view if it's within ~one screenful of the visible candles. On the trade
+        // view the stop/entry are right there, so they show; but after scrolling deep into post-trade
+        // data where price ran far from the stop, we don't squash the candles into a sliver to reach it.
+        const slack = dTo - dFrom || 1;
+        let from = dFrom;
+        let to = dTo;
+        for (const v of rangeMarks) {
+          if (v < dFrom - slack || v > dTo + slack) continue;
+          from = Math.min(from, v);
+          to = Math.max(to, v);
+        }
+        if (from === dFrom && to === dTo) return defaultRange;
+        const pad = (to - from) * 0.04 || 1; // a little breathing room around a mark at the extreme
+        from -= pad;
+        to += pad;
+        const range = to - from;
+        // klinecharts scales the axis off the real* fields — set those, not just from/to.
+        return {
+          from,
+          to,
+          realFrom: from,
+          realTo: to,
+          range,
+          realRange: range,
+          displayFrom: from,
+          displayTo: to,
+          displayRange: range,
+        };
+      },
+    });
+    // FUTU-style B/S pills at the exact fill price+time (see registerFillOverlay). Green for buys, red
+    // for sells — so partial exits and overnight sells each show as their own distinct marker. The pill
+    // is the text figure's rounded background; recolor it (and its border) per fill.
     for (const f of fills) {
+      const fillColor = f.side === "BUY" ? col.up : col.down;
       c.createOverlay({
-        name: "simpleAnnotation",
+        name: FILL_OVERLAY,
         groupId: MARKS,
         lock: true,
         points: [{ timestamp: f.time, value: f.price }],
-        extendData: `${f.side === "BUY" ? "+" : "−"}${f.qty}`,
-        styles: { text: { color: f.side === "BUY" ? col.up : col.down } },
+        extendData: { side: f.side },
+        styles: {
+          text: {
+            color: "#ffffff",
+            size: 11,
+            weight: "bold",
+            backgroundColor: fillColor,
+            borderColor: fillColor,
+            borderRadius: 20, // large radius + tight padding ≈ a round pill
+            paddingLeft: 5,
+            paddingRight: 5,
+            paddingTop: 3,
+            paddingBottom: 3,
+          },
+        },
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
