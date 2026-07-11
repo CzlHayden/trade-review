@@ -3,6 +3,7 @@ import { useTradeDetail, useCandles, useMeta, useTheme, useDrawings, usePutDrawi
 import type { Drawing, Candle } from "../lib/api";
 import type { Res } from "../components/TradeChart";
 import { money, price, pct, rMultiple, signClass, date, dateTime, holdTime, qty } from "../lib/format";
+import { activePosition } from "../../src/core/active-position";
 import { FlagChips } from "../components/FlagChips";
 import { TradeChart } from "../components/TradeChart";
 import { JournalEditor } from "../components/JournalEditor";
@@ -70,6 +71,32 @@ export function TradeDetail({ id }: { id: string }) {
     [t?.avgEntry, data?.journal?.manualStop, data?.stop?.initialStop, t?.effectiveStop, t?.effectiveTp, t?.direction],
   );
 
+  // Current signed holding for an open trade = Σ signed fills (BUY +, SELL −). Exact for trades whose
+  // fills we fully cover (seeded/split-affected trades are gated out of the live panel below).
+  const currentQty = useMemo(
+    () => (data?.fills ?? []).reduce((sum, f) => sum + (f.side === "BUY" ? f.qty : -f.qty), 0),
+    [data?.fills],
+  );
+  // Latest mark = the last loaded candle's close (same series the chart shows). null until candles land.
+  const lastBar = useMemo(() => {
+    const cs = candles.data?.candles;
+    return cs && cs.length > 0 ? cs[cs.length - 1]! : null;
+  }, [candles.data?.candles]);
+  // Live R only for a genuinely-open, fully-covered position. Seeded/corporate-action trades (their
+  // holding predates our fills, so Σfills would understate size) are excluded — they already carry the
+  // "possible corporate action" caveat and no reliable risk basis.
+  const live = useMemo(() => {
+    if (!t || t.status !== "open" || !t.coverageOk || !lastBar) return null;
+    return activePosition({
+      direction: t.direction,
+      avgEntry: t.avgEntry,
+      currentQty,
+      currentPrice: lastBar.close,
+      risk: t.risk,
+      effectiveStop: t.effectiveStop,
+    });
+  }, [t, currentQty, lastBar]);
+
   if (isLoading) return <div className="spinner">Loading…</div>;
   if (!data || !t) return <div className="empty card">Trade not found.</div>;
   const { fills, flags, stop, journal } = data;
@@ -104,6 +131,30 @@ export function TradeDetail({ id }: { id: string }) {
           </span>
         )}
       </div>
+
+      {live && lastBar && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
+            <span className="section-title" style={{ margin: 0 }}>
+              Live position
+            </span>
+            <span className="faint" style={{ fontSize: 12 }}>
+              mark {price(lastBar.close, t.currency)} · {dateTime(lastBar.time)} · holding {qty(currentQty)}
+            </span>
+          </div>
+          <div className="kpi-row" style={{ marginTop: 0 }}>
+            {stat("Open R (now)", rMultiple(live.openR), signClass(live.openR))}
+            {stat("Unrealized P&L", money(live.openPnl, t.currency), signClass(live.openPnl))}
+            {stat("Stop now", t.effectiveStop !== null ? price(t.effectiveStop, t.currency) : "—")}
+            {stat("Locked R (if stopped)", rMultiple(live.lockedR), signClass(live.lockedR))}
+          </div>
+          <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>
+            Locked R is where your stop sits, measured in R off entry: <span className="mono">0R</span> = breakeven
+            (no risk left), <span className="mono">+1R</span> = a full R secured, <span className="mono">−1R</span> = the
+            initial risk still fully on. Open R is unrealized at the mark above.
+          </div>
+        </div>
+      )}
 
       <TradeChart
         symbol={t.symbol}
