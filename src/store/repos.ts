@@ -1,5 +1,22 @@
 import type { Database } from "bun:sqlite";
 import type { Flag, RawFill, RawOrder, RawPosition, Trade } from "../domain/types";
+import { getConfigValue, LAST_SNAPSHOT_TIME } from "./config";
+
+/** The clock of the current position snapshot, in preference order: the persisted marker; else the
+ * latest sync clock from sync_state (backfills a DB migrated before the marker existed — and stays
+ * correct even when that last sync was all-flat, which writes NO raw_positions row); else the latest
+ * stored snapshot time; else `fallback` (fresh DB). pullRaw stamps snapshots and sync_state with the
+ * same `now`, so the sync clock equals the snapshot batch time. Reconciles seeds + "current" holdings. */
+export function snapshotClock(db: Database, fallback: number): number {
+  const marker = getConfigValue(db, LAST_SNAPSHOT_TIME);
+  if (marker !== null) return Number(marker);
+  const sync = db.query(`SELECT MAX(last_synced_time) AS t FROM sync_state`).get() as {
+    t: number | null;
+  };
+  if (sync?.t != null) return sync.t;
+  const pos = db.query(`SELECT MAX(time) AS t FROM raw_positions`).get() as { t: number | null };
+  return pos?.t ?? fallback;
+}
 
 // ---- raw_fills ----------------------------------------------------------------
 

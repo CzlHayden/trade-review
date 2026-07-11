@@ -15,6 +15,17 @@ export function getSyncState(db: Database, account: string, market: string): Syn
   };
 }
 
+/** The oldest coverage_start across all (account, market) cursors — a STABLE history floor: it is
+ * set on first sync and preserved thereafter (never advances). Used as the seed time for a pre-window
+ * holding with no in-window fills, so that seed-only trade's deterministic id doesn't change every
+ * sync (which would orphan any journal/manual stop attached to it). Null before the first sync. */
+export function coverageFloor(db: Database): number | null {
+  const row = db.query(`SELECT MIN(coverage_start) AS c FROM sync_state`).get() as {
+    c: number | null;
+  };
+  return row?.c ?? null;
+}
+
 export function upsertSyncState(db: Database, s: SyncState): void {
   db.run(
     `INSERT INTO sync_state (account, market, last_synced_time, coverage_start)

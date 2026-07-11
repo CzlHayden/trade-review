@@ -9,19 +9,14 @@ import { yahooCandles } from "../candles/yahoo";
 import { runSync } from "./sync";
 import { openDb } from "../store/db";
 import { runMigrations } from "../store/migrations";
-import { backupDb } from "../store/backup";
+import { backupDb, backupStamp } from "../store/backup";
+import { cachedCandles } from "../store/candles-cache";
 import { getRuleConfig } from "../store/config";
 import { dbPath } from "../store/paths";
 
-function stamp(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-}
-
 async function main() {
   const path = dbPath();
-  backupDb(path, stamp()); // no-op on first run (file doesn't exist yet)
+  backupDb(path, backupStamp()); // no-op on first run (file doesn't exist yet)
   const db = openDb(path);
   runMigrations(db);
   const config = getRuleConfig(db);
@@ -30,8 +25,9 @@ async function main() {
   const port = Number(process.env.OPEND_PORT ?? 33334);
   console.log(`Connecting to OpenD ws://127.0.0.1:${port}${key ? " (auth key set)" : ""}…`);
   const client = await connectFutu({ port, key });
+  const candles = cachedCandles(db, yahooCandles, { now: Date.now });
   try {
-    const res = await runSync({ db, client, candles: yahooCandles, config, now: Date.now() });
+    const res = await runSync({ db, client, candles, config, now: Date.now() });
     console.log("Sync complete:", JSON.stringify(res));
   } finally {
     client.close();

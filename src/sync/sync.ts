@@ -1,6 +1,16 @@
 import type { Database } from "bun:sqlite";
 import type { CandleSource, FutuClient } from "../domain/ports";
-import type { Candle, Flag, RawFill, RawPosition, RuleConfig, SeedPosition, Trade } from "../domain/types";
+import type {
+  Candle,
+  Flag,
+  RawFill,
+  RawOrder,
+  RawPosition,
+  RuleConfig,
+  SeedPosition,
+  SyncState,
+  Trade,
+} from "../domain/types";
 import { buildTrades } from "../core/trade-builder";
 import { inferStops } from "../core/stop-inference";
 import { computeRisk } from "../core/risk";
@@ -11,13 +21,17 @@ import {
   allRawFills,
   allRawOrders,
   allTrades,
+  flagsForTrade,
   insertPositionSnapshot,
   positionsAt,
   replaceDerived,
+  snapshotClock,
   upsertRawFills,
   upsertRawOrders,
 } from "../store/repos";
-import { getSyncState, upsertSyncState } from "../store/sync-state";
+import { manualStops } from "../store/journal";
+import { LAST_SNAPSHOT_TIME, setConfigValue } from "../store/config";
+import { coverageFloor, getSyncState, upsertSyncState } from "../store/sync-state";
 
 const DAY_MS = 86_400_000;
 const PAD_MS = 2 * DAY_MS; // context padding around the trade window for candles
@@ -29,6 +43,10 @@ export interface SyncDeps {
   config: RuleConfig;
   now: number; // injected epoch ms (deterministic in tests)
   historyDays?: number; // first-sync lookback window (default 90)
+  // Optional serializer wrapped around ONLY the derived rebuild (not the network pull), so a
+  // long-lived server can share one lock between sync + journal-edit rebuilds without blocking
+  // journal edits behind slow OpenD I/O. Defaults to running the rebuild directly.
+  rebuildGuard?: <T>(fn: () => Promise<T>) => Promise<T>;
 }
 
 export interface SyncResult {
@@ -104,18 +122,33 @@ function recentClosedTrades(prior: Trade[], t: Trade): Trade[] {
 }
 
 /**
- * Pull raw data from OpenD, persist it, then rebuild all derived trades/flags from the full raw
- * set. Idempotent: raw upserts are keyed, derived data is fully replaced. Candle-fetch failure
- * degrades to no MAE/MFE (never breaks the sync).
+ * Phase 1 — pull raw data from OpenD and persist it (raw upserts are keyed/idempotent). Touches
+ * the network; does NOT rebuild derived data. Returns the count of real accounts pulled so the
+ * `runSync` wrapper can assemble its summary.
+ *
+ * All network results are GATHERED first, then written in ONE transaction. This makes the raw store
+ * update atomic: a concurrent (journal-triggered) rebuild only ever sees the pre-sync-complete or
+ * post-sync-complete raw set — never a half-pulled one — and a mid-pull network failure writes
+ * nothing (leaving derived data untouched). That is what lets `runSync` lock only the rebuild, not
+ * the network pull, without a journal edit corrupting derived data from a partial raw store.
  */
-export async function runSync(deps: SyncDeps): Promise<SyncResult> {
-  const { db, client, candles, config, now } = deps;
-  const historyDays = deps.historyDays ?? 90;
+export async function pullRaw(
+  db: Database,
+  client: FutuClient,
+  opts: { now: number; historyDays?: number },
+): Promise<{ accounts: number }> {
+  const { now } = opts;
+  const historyDays = opts.historyDays ?? 90;
 
   // FUTU returns real AND simulate accounts; only real ones have queryable history and belong in
   // the review DB. Sync only recognized markets (skip futures/funds/unknown).
   const accounts = (await client.getAccounts()).filter((a) => a.trdEnv === TRD_ENV_REAL);
 
+  // ---- gather (network only, no writes) ----
+  const allFills: RawFill[] = [];
+  const allOrders: RawOrder[] = [];
+  const cursors: SyncState[] = [];
+  const snapshotBatches: RawPosition[][] = [];
   for (const acc of accounts) {
     const snapshot: RawPosition[] = [];
     for (const market of acc.markets) {
@@ -126,31 +159,53 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
       const beginMs = state?.lastSyncedTime ?? fullWindowBegin;
       const endMs = now;
 
-      const fills = await client.getHistoryFills(acc, market, beginMs, endMs);
-      if (fills.length) upsertRawFills(db, fills);
+      allFills.push(...(await client.getHistoryFills(acc, market, beginMs, endMs)));
 
       // Orders MUTATE after creation (a trailed/cancelled stop changes status + auxPrice), and FUTU
       // filters history orders by CREATE time — so an incremental window would never refetch a moved
       // stop. Always pull the full window for orders (volume is low). Bound: orders older than
       // historyDays whose stop moved recently still won't refresh — acceptable for v1 swing horizons.
-      const orders = await client.getHistoryOrders(acc, market, fullWindowBegin, endMs);
-      if (orders.length) upsertRawOrders(db, orders);
+      allOrders.push(...(await client.getHistoryOrders(acc, market, fullWindowBegin, endMs)));
 
       const positions = await client.getPositions(acc, market);
       for (const p of positions) snapshot.push({ ...p, time: now }); // stamp one coherent batch time
 
-      upsertSyncState(db, {
+      cursors.push({
         account: acc.id,
         market: mkt,
         lastSyncedTime: now,
         coverageStart: state?.coverageStart ?? beginMs,
       });
     }
-    // One snapshot batch per account at `now`. Empty batch ⇒ flat account (positionsAt(now) === []).
-    insertPositionSnapshot(db, snapshot);
+    snapshotBatches.push(snapshot); // one batch per account (may be empty ⇒ flat account)
   }
 
-  // ---- rebuild derived from the full raw set ----
+  // ---- write (single atomic transaction) ----
+  db.transaction(() => {
+    if (allFills.length) upsertRawFills(db, allFills);
+    if (allOrders.length) upsertRawOrders(db, allOrders);
+    for (const c of cursors) upsertSyncState(db, c);
+    for (const batch of snapshotBatches) insertPositionSnapshot(db, batch);
+    // Persist the snapshot clock so a later standalone rebuild (journal/config edit) reconciles seeds
+    // against THIS batch, and an all-flat sync (which writes no rows) still reports zero holdings.
+    setConfigValue(db, LAST_SNAPSHOT_TIME, String(now));
+  })();
+
+  return { accounts: accounts.length };
+}
+
+/**
+ * Phase 2 — rebuild ALL derived trades/flags from the full raw set. Pure of the network: it reads
+ * only the local DB (+ candles) and fully replaces derived data, so it is also the recompute path
+ * for a manual-stop or rule-config edit (no OpenD round-trip). Candle-fetch failure degrades to no
+ * MAE/MFE. A user-entered manual stop (journal) overrides the order-inferred stop for risk/R/flags.
+ */
+export async function rebuildDerived(
+  db: Database,
+  opts: { candles: CandleSource; config: RuleConfig; now: number },
+): Promise<void> {
+  const { candles, config, now } = opts;
+
   // Prior derived trades, keyed by id — used to carry forward MAE/MFE if candles degrade this run,
   // so a transient Yahoo outage can't overwrite previously-correct excursions (and the flags that
   // depend on them) with nulls. Trade ids are deterministic, so an unchanged trade keeps its key.
@@ -158,10 +213,21 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
 
   const allFills = allRawFills(db);
   const allOrders = allRawOrders(db);
+  const manual = manualStops(db); // trade id → user-entered stop (authoritative over inference)
   // Seed positions that predate our data window (reconciled against the current snapshot) so a
   // holding opened before coverage and sold inside it is built as coverage-incomplete rather than a
-  // phantom opposite-direction trade with wrong P&L. See deriveSeeds.
-  const seeds = deriveSeeds(allFills, positionsAt(db, now), now);
+  // phantom opposite-direction trade with wrong P&L. Reconcile against the persisted SNAPSHOT clock,
+  // not wall-clock `now`: a standalone rebuild (journal/config edit) uses a different `now` that
+  // matches no snapshot batch, and positionsAt(now) would be empty → spurious/omitted seeds. See
+  // deriveSeeds. snapshotClock backfills the latest stored snapshot for a pre-marker (migrated) DB,
+  // and falls back to `now` only before the first sync (no snapshot, no fills → no seeds).
+  const snapTime = snapshotClock(db, now);
+  // Seed TIME (used in a seed-only trade's deterministic id) must be STABLE across syncs, else a
+  // never-traded pre-window holding gets a new id each sync and orphans its journal/manual stop. Use
+  // the fixed coverage floor, not the ever-advancing snapshot clock. (Positions with in-window fills
+  // take their first fill time inside deriveSeeds; this fallback only bites pure seed-only holdings.)
+  const seedTime = coverageFloor(db) ?? snapTime;
+  const seeds = deriveSeeds(allFills, positionsAt(db, snapTime), seedTime);
   const built = buildTrades(allFills, seeds).sort(
     (a, b) => a.openTime - b.openTime || a.id.localeCompare(b.id),
   );
@@ -172,7 +238,13 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
   for (const t of built) {
     const symbolOrders = allOrders.filter((o) => o.account === t.account && o.symbol === t.symbol);
     const stop = inferStops(t, symbolOrders);
-    const { risk, rMultiple } = computeRisk(t, stop.initialStop); // initial = planned risk (spec §6)
+    // Manual stop (if set) overrides inference for BOTH the planned-risk basis and the effective
+    // stop, so risk/R and the held_past_stop rule all read the user's explicit stop. TP is still
+    // inference-only (no manual TP field in v1).
+    const ms = manual.get(t.id);
+    const initialStop = ms ?? stop.initialStop; // initial = planned risk (spec §6)
+    const effectiveStop = ms ?? stop.effectiveStop;
+    const { risk, rMultiple } = computeRisk(t, initialStop);
 
     const resMs = resolutionMs(t);
     const from = t.openTime - PAD_MS;
@@ -199,7 +271,7 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
 
     const enriched: Trade = {
       ...t,
-      effectiveStop: stop.effectiveStop,
+      effectiveStop,
       effectiveTp: stop.effectiveTp,
       risk,
       rMultiple,
@@ -216,16 +288,27 @@ export async function runSync(deps: SyncDeps): Promise<SyncResult> {
   }
 
   replaceDerived(db, enrichedTrades, flagMap);
+}
 
+/**
+ * Full sync: pull raw from OpenD, then rebuild derived. Thin wrapper over pullRaw + rebuildDerived
+ * used by the CLI and the "Sync now" job. Reports DISTINCT stored counts (OpenD returns an account's
+ * rows across every market-header query, so a per-pull sum would double-count).
+ */
+export async function runSync(deps: SyncDeps): Promise<SyncResult> {
+  const { db, client, candles, config, now } = deps;
+  const { accounts } = await pullRaw(db, client, { now, historyDays: deps.historyDays });
+  const guard = deps.rebuildGuard ?? ((fn) => fn());
+  await guard(() => rebuildDerived(db, { candles, config, now }));
+
+  const trades = allTrades(db);
   let flagCount = 0;
-  for (const f of flagMap.values()) flagCount += f.length;
-  // Report DISTINCT stored rows: OpenD returns an account's rows across every market-header query,
-  // so a per-pull sum would double-count. allFills/allOrders are deduped by primary key.
+  for (const t of trades) flagCount += flagsForTrade(db, t.id).length;
   return {
-    accounts: accounts.length,
-    fills: allFills.length,
-    orders: allOrders.length,
-    trades: enrichedTrades.length,
+    accounts,
+    fills: allRawFills(db).length,
+    orders: allRawOrders(db).length,
+    trades: trades.length,
     flags: flagCount,
   };
 }
