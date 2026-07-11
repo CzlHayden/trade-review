@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { CandleSource, FutuClient } from "../domain/ports";
 import type {
+  AccountFunds,
   Candle,
   Flag,
   RawFill,
@@ -16,7 +17,8 @@ import { inferStops } from "../core/stop-inference";
 import { computeRisk } from "../core/risk";
 import { computeExcursion } from "../core/mae-mfe";
 import { evaluate } from "../core/rule-engine";
-import { knownMarket, marketName, TRD_ENV_REAL } from "../futu/map";
+import { currencyEnumFor, currencyForMarket, knownMarket, marketName, TRD_ENV_REAL } from "../futu/map";
+import { insertFunds } from "../store/funds";
 import {
   allRawFills,
   allRawOrders,
@@ -149,8 +151,17 @@ export async function pullRaw(
   const allOrders: RawOrder[] = [];
   const cursors: SyncState[] = [];
   const snapshotBatches: RawPosition[][] = [];
+  const allFunds: AccountFunds[] = [];
   for (const acc of accounts) {
     const snapshot: RawPosition[] = [];
+    // Distinct currencies this account trades (one funds snapshot per denomination). FUTU converts
+    // net assets into each requested currency, so equity/risk stay same-currency downstream.
+    const currencies = new Map<string, number>(); // code → a representative market (for the header)
+    for (const market of acc.markets) {
+      if (!knownMarket(market)) continue;
+      const ccy = currencyForMarket(market);
+      if (ccy !== "UNKNOWN" && !currencies.has(ccy)) currencies.set(ccy, market);
+    }
     for (const market of acc.markets) {
       if (!knownMarket(market)) continue;
       const mkt = marketName(market);
@@ -178,6 +189,17 @@ export async function pullRaw(
       });
     }
     snapshotBatches.push(snapshot); // one batch per account (may be empty ⇒ flat account)
+
+    // Equity snapshot per currency. Best-effort: a funds failure must not abort the whole sync (it
+    // only disables the risk-% overlay), so swallow per-currency errors and stamp the batch time.
+    for (const [ccy, market] of currencies) {
+      try {
+        const f = await client.getFunds(acc, market, currencyEnumFor(ccy));
+        if (f) allFunds.push({ ...f, time: now });
+      } catch {
+        // OpenD may not support funds for this account/currency — skip, leave risk-% absent.
+      }
+    }
   }
 
   // ---- write (single atomic transaction) ----
@@ -186,6 +208,7 @@ export async function pullRaw(
     if (allOrders.length) upsertRawOrders(db, allOrders);
     for (const c of cursors) upsertSyncState(db, c);
     for (const batch of snapshotBatches) insertPositionSnapshot(db, batch);
+    for (const f of allFunds) insertFunds(db, f);
     // Persist the snapshot clock so a later standalone rebuild (journal/config edit) reconciles seeds
     // against THIS batch, and an all-flat sync (which writes no rows) still reports zero holdings.
     setConfigValue(db, LAST_SNAPSHOT_TIME, String(now));

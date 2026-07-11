@@ -1,5 +1,5 @@
 import { usePositions } from "../lib/hooks";
-import { price, money, qty, signClass } from "../lib/format";
+import { price, money, pct, qty, signClass } from "../lib/format";
 
 /** Current holdings, grouped per currency (open risk is never summed across currencies). */
 export function Positions() {
@@ -11,11 +11,18 @@ export function Positions() {
   return (
     <div>
       {groups.map((g) => {
-        const totalRisk = g.positions.reduce((s, p) => s + (p.openRisk ?? 0), 0);
+        const totalRisk = g.totalOpenRisk ?? 0;
         return (
           <div key={g.currency} style={{ marginBottom: 18 }}>
             <div className="section-title" style={{ marginTop: 0 }}>
               {g.currency} · {g.positions.length} position{g.positions.length === 1 ? "" : "s"} · open risk {money(-totalRisk, g.currency)}
+              {g.riskPct !== null ? (
+                <span className="faint"> · {pct(g.riskPct)} of equity</span>
+              ) : (
+                <span className="faint" title="No account-equity snapshot yet — run a sync to capture it">
+                  {" "}· equity n/a
+                </span>
+              )}
             </div>
             <div className="table-wrap">
               <table className="data">

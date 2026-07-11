@@ -19,9 +19,8 @@ import { rebuildDerived } from "../sync/sync";
 import {
   latestSnapshotTime,
   metaView,
-  openPositions,
+  openPositionsByCurrency,
   tradeDetail,
-  type OpenPosition,
 } from "./views";
 import type { SyncRunner } from "./sync-runner";
 import { Mutex } from "./mutex";
@@ -125,21 +124,6 @@ async function readJsonObject(req: Request): Promise<Record<string, unknown> | n
   return b as Record<string, unknown>;
 }
 
-/** Group open positions per currency so the wire shape can't be summed across currencies. */
-function positionsByCurrency(positions: OpenPosition[]) {
-  const groups = new Map<string, OpenPosition[]>();
-  for (const p of positions) {
-    const arr = groups.get(p.currency) ?? [];
-    arr.push(p);
-    groups.set(p.currency, arr);
-  }
-  return {
-    byCurrency: [...groups.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([currency, ps]) => ({ currency, positions: ps })),
-  };
-}
-
 export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise<Response> {
   const rebuildLock = deps.rebuildLock ?? new Mutex();
   return async (req) => {
@@ -233,7 +217,7 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
       }
       // GET /api/positions
       if (seg.length === 2 && seg[1] === "positions" && method === "GET") {
-        return json(positionsByCurrency(openPositions(db, latestSnapshotTime(db))));
+        return json(openPositionsByCurrency(db, latestSnapshotTime(db)));
       }
       // GET /api/meta
       if (seg.length === 2 && seg[1] === "meta" && method === "GET") {

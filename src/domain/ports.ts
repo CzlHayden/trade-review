@@ -1,4 +1,4 @@
-import type { Candle, RawFill, RawOrder, RawPosition } from "./types";
+import type { AccountFunds, Candle, RawFill, RawOrder, RawPosition } from "./types";
 
 /** A trading account as surfaced by OpenD (Trd_GetAccList). */
 export interface Account {
@@ -13,6 +13,9 @@ export interface FutuClient {
   getHistoryFills(account: Account, market: number, beginMs: number, endMs: number): Promise<RawFill[]>;
   getHistoryOrders(account: Account, market: number, beginMs: number, endMs: number): Promise<RawOrder[]>;
   getPositions(account: Account, market: number): Promise<RawPosition[]>;
+  /** Net account equity in `currency` (a Trd_Common.Currency enum). `market` populates the request
+   * header. Returns null when OpenD reports no funds for the account. */
+  getFunds(account: Account, market: number, currency: number): Promise<AccountFunds | null>;
   close(): void;
 }
 

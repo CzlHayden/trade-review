@@ -141,6 +141,22 @@ export const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
       );
     `);
   },
+  // v6 — account equity snapshots (Trd_GetFunds), per (account, currency) at a snapshot time.
+  // Lets a trade's planned risk be shown as a % of account equity. One row per denomination we
+  // requested; equity/risk are compared same-currency only (money-math invariant).
+  (db) => {
+    db.run(`
+      CREATE TABLE account_funds (
+        account TEXT NOT NULL,
+        time INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        total_assets REAL NOT NULL,
+        cash REAL NOT NULL,
+        market_val REAL NOT NULL,
+        PRIMARY KEY (account, time, currency)
+      );
+    `);
+  },
 ];
 
 export function currentVersion(db: Database): number {

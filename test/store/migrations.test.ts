@@ -75,3 +75,20 @@ test("v3 adds flags and config tables", () => {
   expect(names).toContain("flags");
   expect(names).toContain("config");
 });
+
+test("v6 adds account_funds keyed on (account, time, currency)", () => {
+  const db = memDb();
+  runMigrations(db);
+  const names = db
+    .query("SELECT name FROM sqlite_master WHERE type='table'")
+    .all()
+    .map((r: any) => r.name);
+  expect(names).toContain("account_funds");
+  const cols = db
+    .query("PRAGMA table_info(account_funds)")
+    .all()
+    .map((r: any) => r.name);
+  for (const c of ["account", "time", "currency", "total_assets", "cash", "market_val"]) {
+    expect(cols).toContain(c);
+  }
+});

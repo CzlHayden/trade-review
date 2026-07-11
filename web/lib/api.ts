@@ -28,6 +28,9 @@ export interface TradeDetail {
   flags: Flag[];
   stop: StopInfo;
   journal: Journal | null;
+  riskPct: number | null;
+  accountEquity: number | null;
+  equityBasis: "at_open" | "latest" | "none";
 }
 
 export interface OpenPosition {
@@ -39,8 +42,15 @@ export interface OpenPosition {
   effectiveStop: number | null;
   openRisk: number | null;
 }
+export interface CurrencyPositions {
+  currency: string;
+  positions: OpenPosition[];
+  totalOpenRisk: number | null;
+  equity: number | null;
+  riskPct: number | null;
+}
 export interface PositionsResponse {
-  byCurrency: Array<{ currency: string; positions: OpenPosition[] }>;
+  byCurrency: CurrencyPositions[];
 }
 
 export interface Meta {

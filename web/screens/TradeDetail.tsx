@@ -1,6 +1,6 @@
 import { useMemo, type ReactNode } from "react";
 import { useTradeDetail, useCandles, useMeta, useTheme } from "../lib/hooks";
-import { money, price, rMultiple, signClass, date, dateTime, holdTime, qty } from "../lib/format";
+import { money, price, pct, rMultiple, signClass, date, dateTime, holdTime, qty } from "../lib/format";
 import { FlagChips } from "../components/FlagChips";
 import { TradeChart } from "../components/TradeChart";
 import { JournalEditor } from "../components/JournalEditor";
@@ -44,7 +44,14 @@ export function TradeDetail({ id }: { id: string }) {
         <span className="muted">
           {date(t.openTime)} → {t.closeTime ? date(t.closeTime) : "open"} · {holdTime(t.holdSeconds)}
         </span>
-        {!t.coverageOk && <span className="ccy-badge">partial coverage</span>}
+        {!t.coverageOk && (
+          <span
+            className="ccy-badge"
+            title="This position predates our data coverage or shows a share-count change without matching fills (possible split/corporate action). Excluded from stats; risk/R not computed and P&L may be approximate."
+          >
+            possible corporate action
+          </span>
+        )}
       </div>
 
       <TradeChart
@@ -57,7 +64,19 @@ export function TradeDetail({ id }: { id: string }) {
       <div className="kpi-row" style={{ marginTop: 12 }}>
         {stat("Realized P&L", t.realizedPnl !== null ? money(t.realizedPnl, t.currency) : "—", signClass(t.realizedPnl))}
         {stat("R-multiple", rMultiple(t.rMultiple), signClass(t.rMultiple))}
-        {stat("Risk", t.risk !== null ? price(t.risk, t.currency) : "—")}
+        {stat(
+          "Planned risk",
+          <>
+            {t.risk !== null ? price(t.risk, t.currency) : "—"}
+            {data.riskPct !== null && (
+              <span className="faint" style={{ fontSize: 12 }}>
+                {" · "}
+                {data.equityBasis === "latest" ? "≈" : ""}
+                {pct(data.riskPct)} of acct
+              </span>
+            )}
+          </>,
+        )}
         {stat("Avg entry / exit", `${price(t.avgEntry, t.currency)} / ${t.avgExit !== null ? price(t.avgExit, t.currency) : "—"}`)}
         {stat("Max size", qty(t.maxQty))}
         {stat(
@@ -93,21 +112,43 @@ export function TradeDetail({ id }: { id: string }) {
             )}
           </div>
 
-          <div className="section-title">Inferred stop</div>
-          <div className="card" style={{ padding: 12 }}>
-            {stop.receipt ? (
-              <span className="mono" style={{ fontSize: 12 }}>
-                {stop.receipt}
-              </span>
-            ) : (
-              <span className="muted">No protective stop found in orders.</span>
-            )}
-            {journal?.manualStop != null && (
-              <div style={{ marginTop: 8 }}>
-                Manual stop <span className="mono">{price(journal.manualStop, t.currency)}</span>{" "}
-                <span className="faint">overrides inference</span>
-              </div>
-            )}
+          <div className="section-title">Stops &amp; risk basis</div>
+          <div className="card" style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10, fontSize: 12 }}>
+            {(() => {
+              // R/risk is computed from the PLANNED stop (manual override, else the initial inferred
+              // stop) — NOT the effective/trailing stop shown below. Surface both so R is reconcilable.
+              const plannedStop = journal?.manualStop ?? stop.initialStop;
+              return (
+                <>
+                  <div>
+                    <div className="kpi-label">Planned stop {journal?.manualStop != null ? "(manual)" : ""} · risk basis</div>
+                    {plannedStop != null ? (
+                      <span className="mono">{price(plannedStop, t.currency)}</span>
+                    ) : (
+                      <span className="muted">none — R not computed</span>
+                    )}
+                    {plannedStop != null && t.risk !== null && (
+                      <div className="faint mono" style={{ marginTop: 2 }}>
+                        |{price(t.avgEntry, t.currency)} − {price(plannedStop, t.currency)}| × {qty(t.maxQty)} = {price(t.risk, t.currency)}
+                      </div>
+                    )}
+                    {plannedStop != null && t.risk === null && (
+                      <div className="faint" style={{ marginTop: 2 }}>
+                        Risk not computed{!t.coverageOk ? " — seeded trade (cost basis predates coverage)" : " — stop is on the profit side of entry"}.
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <div className="kpi-label">Effective stop (last active)</div>
+                    {stop.receipt ? (
+                      <span className="mono">{stop.receipt}</span>
+                    ) : (
+                      <span className="muted">No protective stop found in orders.</span>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
       </div>

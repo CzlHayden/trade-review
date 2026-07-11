@@ -36,6 +36,17 @@ export interface RawPosition {
   time: number; // epoch ms of the snapshot
 }
 
+/** Account equity snapshot (Trd_GetFunds), denominated in ONE currency (FUTU does the FX on request).
+ * Used to express a trade's planned risk as a % of account equity — never mix currencies. */
+export interface AccountFunds {
+  account: string;
+  currency: string; // the denomination we requested (comprehensive accounts require a currency)
+  totalAssets: number; // net asset value in `currency`
+  cash: number;
+  marketVal: number;
+  time: number; // epoch ms of the snapshot (sync stamps its snapshot clock)
+}
+
 /** Sync cursor for one (account, market). Persisted so re-syncs are incremental. */
 export interface SyncState {
   account: string;

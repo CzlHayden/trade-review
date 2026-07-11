@@ -76,7 +76,7 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
             <tr key={t.id} className="clickable" onClick={() => navigate(`/trades/${encodeURIComponent(t.id)}`)}>
               <td className="mono">
                 {t.symbol}
-                {!t.coverageOk && <span className="ccy-badge" title="Opened before data coverage — excluded from stats">partial</span>}
+                {!t.coverageOk && <span className="ccy-badge" title="Predates data coverage or a share-count change without matching fills (possible corporate action) — excluded from stats; risk/R not computed, P&L may be approximate">corp action?</span>}
               </td>
               <td className={t.direction === "LONG" ? "pos" : "neg"} style={{ fontSize: 11, fontWeight: 600 }}>
                 {t.direction}
