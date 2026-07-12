@@ -37,6 +37,19 @@ test("added_to_loser: adding to a winner does NOT fire", () => {
   expect(ids(flags)).not.toContain("added_to_loser");
 });
 
+test("added_to_loser: partial fills of ONE entry order are not an add-to-loser", () => {
+  // FUTU splits a single BUY into two partial fills (same orderId), the second printing below the
+  // first. That is one order finishing at a blended cost — NOT a scale-in while underwater. The
+  // running-average walk must operate on per-order tranches, not raw fills, so it must not fire.
+  const fills = [
+    fill("BUY", 100, 10, { time: 1000, orderId: "entry1" }),
+    fill("BUY", 100, 9, { time: 1001, orderId: "entry1" }), // same order, later partial below the first
+    fill("SELL", 200, 9.5, { time: 3000, orderId: "exit1" }),
+  ];
+  const trade = buildTrades(fills)[0]!;
+  expect(ids(evaluate(trade, ctx({ fills }), DEFAULT_RULE_CONFIG))).not.toContain("added_to_loser");
+});
+
 test("cut_winner_early: closed winner under 1R", () => {
   const trade = { ...base(), realizedPnl: 50, rMultiple: 0.4 };
   expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).toContain("cut_winner_early");

@@ -7,40 +7,6 @@ function on(config: RuleConfig, ruleId: string): boolean {
   return config.enabled[ruleId] !== false; // missing = enabled
 }
 
-/** Did the trader add to the position while it was underwater? Walk the fills. */
-function addedToLoser(trade: Trade, fills: RawFill[]): boolean {
-  const chrono = fills
-    .slice()
-    .sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
-  let qty = 0; // signed
-  let costQty = 0;
-  let costVal = 0;
-  for (const f of chrono) {
-    const signed = f.side === "BUY" ? f.qty : -f.qty;
-    const isAdd = qty === 0 ? true : Math.sign(signed) === Math.sign(qty);
-    if (isAdd && qty !== 0) {
-      const avg = costVal / costQty;
-      // Long underwater when the add price is below avg cost; short when above.
-      if (trade.direction === "LONG" ? f.price < avg - EPS : f.price > avg + EPS) return true;
-    }
-    if (isAdd) {
-      costQty += f.qty;
-      costVal += f.qty * f.price;
-      qty += signed;
-    } else {
-      // reducing — remove shares at the running average cost (avg is unchanged),
-      // so a later re-add is compared against the correct basis.
-      if (costQty > EPS) {
-        const avg = costVal / costQty;
-        costQty -= f.qty;
-        costVal -= avg * f.qty;
-      }
-      qty += signed;
-    }
-  }
-  return false;
-}
-
 interface Tranche {
   side: "BUY" | "SELL";
   qty: number;
@@ -67,6 +33,48 @@ function orderTranches(fills: RawFill[]): Tranche[] {
   return [...byOrder.entries()]
     .map(([id, o]) => ({ side: o.side, qty: o.qty, price: o.notional / o.qty, time: o.time, id }))
     .sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
+}
+
+/** Did the trader add to the position while it was underwater? Walks per-ORDER tranches, not raw
+ * fills — FUTU splits one order into several fills at slightly different prices, and a partial fill
+ * printing below the running average is that order finishing, NOT a scale-in into a loser.
+ *
+ * Known limitation (rare, both directions): a tranche carries its order's notional-weighted price
+ * stamped at the order's EARLIEST fill time. When two partials of one order bracket a separate order
+ * (A-partial, B, A-remainder), B is compared against A's fully-blended basis — fills that hadn't yet
+ * printed when B was placed — so an interleaved add can spuriously fire or an underwater add can be
+ * masked. The alternative (grouping only consecutive same-order fills) reintroduces the very false
+ * positive this rule fixes. Recovering decision-time basis needs order placement timestamps FUTU
+ * doesn't expose; deferred rather than trade one failure mode for another. Same tranche semantics as
+ * improperPyramid. */
+function addedToLoser(trade: Trade, fills: RawFill[]): boolean {
+  let qty = 0; // signed
+  let costQty = 0;
+  let costVal = 0;
+  for (const tr of orderTranches(fills)) {
+    const signed = tr.side === "BUY" ? tr.qty : -tr.qty;
+    const isAdd = qty === 0 ? true : Math.sign(signed) === Math.sign(qty);
+    if (isAdd && qty !== 0) {
+      const avg = costVal / costQty;
+      // Long underwater when the add price is below avg cost; short when above.
+      if (trade.direction === "LONG" ? tr.price < avg - EPS : tr.price > avg + EPS) return true;
+    }
+    if (isAdd) {
+      costQty += tr.qty;
+      costVal += tr.qty * tr.price;
+      qty += signed;
+    } else {
+      // reducing — remove shares at the running average cost (avg is unchanged),
+      // so a later re-add is compared against the correct basis.
+      if (costQty > EPS) {
+        const avg = costVal / costQty;
+        costQty -= tr.qty;
+        costVal -= avg * tr.qty;
+      }
+      qty += signed;
+    }
+  }
+  return false;
 }
 
 /** Did the trader pyramid the wrong way? O'Neil: add only in DECREASING size and near the buy point.
