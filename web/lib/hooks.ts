@@ -1,6 +1,8 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
-import { useEffect, useState, useSyncExternalStore } from "react";
-import { api, type Drawing, type Res } from "./api";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { api, type Drawing, type Res, type SyncStatus } from "./api";
+import { syncToastContent } from "./sync-toast";
+import type { ToastData } from "../components/Toast";
 
 export const useStats = () => useQuery({ queryKey: ["stats"], queryFn: api.stats });
 export const useTrades = () => useQuery({ queryKey: ["trades"], queryFn: api.trades });
@@ -92,6 +94,30 @@ export function useStartSync() {
     mutationFn: api.startSync,
     onSuccess: () => qc.invalidateQueries({ queryKey: ["syncStatus"] }),
   });
+}
+
+/** Surface a toast each time a sync COMPLETES (success or failure), keyed off `finishedAt` changing.
+ * The first observed status just seeds the baseline, so a sync that finished before this mount (the
+ * common page-load case) never pops a stale toast. */
+export function useSyncToasts(status: SyncStatus | undefined) {
+  const [toasts, setToasts] = useState<ToastData[]>([]);
+  const seenFinish = useRef<number | null | undefined>(undefined); // undefined = not yet baselined
+  const nextId = useRef(1);
+  useEffect(() => {
+    if (!status) return;
+    const fin = status.finishedAt;
+    if (seenFinish.current === undefined) {
+      seenFinish.current = fin; // baseline the first status we see; don't toast for it
+      return;
+    }
+    if (fin !== null && fin !== seenFinish.current) {
+      seenFinish.current = fin;
+      const content = syncToastContent(status);
+      if (content) setToasts((ts) => [...ts, { id: nextId.current++, ...content }]);
+    }
+  }, [status]);
+  const dismiss = useCallback((id: number) => setToasts((ts) => ts.filter((t) => t.id !== id)), []);
+  return { toasts, dismiss };
 }
 
 // ---- theme (shared external store) ----
