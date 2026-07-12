@@ -69,6 +69,23 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+/** Guard a destructive, unauthenticated localhost endpoint against cross-site invocation. A bodyless
+ * POST is a CORS *simple request* (no preflight), so without this any web page the user has open could
+ * POST here and, e.g., kill the app. Two independent checks:
+ *   - Sec-Fetch-Site: browsers always send it; a drive-by page arrives as "cross-site"/"same-site",
+ *     our own SPA as "same-origin". Non-browser callers (curl, tests) omit it — not the CSRF threat.
+ *   - Host must be loopback: defeats DNS-rebinding, where a rebound attacker host is same-origin to
+ *     itself (so Sec-Fetch-Site passes) but its Host header is not 127.0.0.1/localhost. */
+function sameOriginLocal(req: Request): boolean {
+  const site = req.headers.get("sec-fetch-site");
+  if (site !== null && site !== "same-origin" && site !== "none") return false;
+  const host = req.headers.get("host");
+  if (host !== null && !LOOPBACK_HOSTS.has(host.split(":")[0]!)) return false;
+  return true;
+}
+
 /** trade_id → setup (single) and trade_id → tags (multi), for embedding + breakdowns. */
 function setupMap(db: Database): Map<string, string> {
   const rows = db.query(`SELECT trade_id, setup FROM journal WHERE setup IS NOT NULL`).all() as any[];
@@ -340,6 +357,7 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
       // console to Ctrl+C). 503 when no shutdown is wired (tests, embedded). The dep defers the actual
       // server-stop/exit so this 202 response flushes to the browser first.
       if (seg.length === 2 && seg[1] === "quit" && method === "POST") {
+        if (!sameOriginLocal(req)) return json({ error: "forbidden" }, 403);
         if (!deps.quit) return json({ error: "quit unavailable" }, 503);
         deps.quit();
         return json({ quitting: true }, 202);

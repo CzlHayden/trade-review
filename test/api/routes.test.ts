@@ -527,6 +527,14 @@ test("sync endpoints 503 when no runner is wired", async () => {
   expect(res.status).toBe(503);
 });
 
+// The app's own SPA POSTs same-origin from the loopback page. Model that here.
+function sameOriginQuit(): Request {
+  return new Request("http://127.0.0.1:8123/api/quit", {
+    method: "POST",
+    headers: { "sec-fetch-site": "same-origin" },
+  });
+}
+
 test("POST /api/quit invokes the injected shutdown and 202s", async () => {
   const db = new Database(":memory:");
   runMigrations(db);
@@ -540,7 +548,7 @@ test("POST /api/quit invokes the injected shutdown and 202s", async () => {
       quits += 1;
     },
   });
-  const res = await app(new Request("http://x/api/quit", { method: "POST" }));
+  const res = await app(sameOriginQuit());
   expect(res.status).toBe(202);
   expect(((await res.json()) as any).quitting).toBe(true);
   expect(quits).toBe(1);
@@ -548,6 +556,55 @@ test("POST /api/quit invokes the injected shutdown and 202s", async () => {
 
 test("POST /api/quit 503s when no shutdown is wired (e.g. tests / embedded)", async () => {
   const { app } = await api(); // no quit dep
-  const res = await app(new Request("http://x/api/quit", { method: "POST" }));
+  const res = await app(sameOriginQuit());
   expect(res.status).toBe(503);
+});
+
+test("POST /api/quit rejects a cross-site (drive-by) request without shutting down", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  let quits = 0;
+  const app = buildApi(db, {
+    candles: noCandles,
+    config: DEFAULT_RULE_CONFIG,
+    sync: null,
+    now: () => 3000,
+    quit: () => {
+      quits += 1;
+    },
+  });
+  // A malicious page's fetch to 127.0.0.1 arrives with Sec-Fetch-Site: cross-site — must be refused.
+  const res = await app(
+    new Request("http://127.0.0.1:8123/api/quit", {
+      method: "POST",
+      headers: { "sec-fetch-site": "cross-site" },
+    }),
+  );
+  expect(res.status).toBe(403);
+  expect(quits).toBe(0);
+});
+
+test("POST /api/quit rejects a non-loopback Host (DNS-rebinding) even if same-origin", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  let quits = 0;
+  const app = buildApi(db, {
+    candles: noCandles,
+    config: DEFAULT_RULE_CONFIG,
+    sync: null,
+    now: () => 3000,
+    quit: () => {
+      quits += 1;
+    },
+  });
+  // Rebinding: attacker.example resolves to 127.0.0.1, so the browser sends Sec-Fetch-Site: same-origin
+  // (to attacker.example) but the Host header is the attacker's domain, not loopback.
+  const res = await app(
+    new Request("http://attacker.example/api/quit", {
+      method: "POST",
+      headers: { "sec-fetch-site": "same-origin", host: "attacker.example" },
+    }),
+  );
+  expect(res.status).toBe(403);
+  expect(quits).toBe(0);
 });
