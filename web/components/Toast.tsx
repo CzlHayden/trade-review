@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 export type ToastKind = "ok" | "err";
 
@@ -40,14 +41,17 @@ function Toast({ toast, onDismiss }: { toast: ToastData; onDismiss: (id: number)
   );
 }
 
-/** Fixed-position stack of toasts (newest at the bottom, nearest the corner). */
+/** Fixed-position stack of toasts (newest at the bottom, nearest the corner). Portalled to <body>
+ * so it is NOT contained by a filtered/transformed ancestor (the topbar has backdrop-filter, which
+ * would otherwise become the containing block for `position: fixed` and anchor toasts to the header). */
 export function ToastHost({ toasts, onDismiss }: { toasts: ToastData[]; onDismiss: (id: number) => void }) {
   if (toasts.length === 0) return null;
-  return (
+  return createPortal(
     <div className="toast-host">
       {toasts.map((t) => (
         <Toast key={t.id} toast={t} onDismiss={onDismiss} />
       ))}
-    </div>
+    </div>,
+    document.body,
   );
 }
