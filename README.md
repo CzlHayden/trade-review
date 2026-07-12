@@ -37,7 +37,7 @@ Download the file for your computer from the **[Releases page](https://github.co
 | Your computer | Download | First launch |
 | --- | --- | --- |
 | **Windows** | `trade-review-windows-x64.exe` | Windows may show "Windows protected your PC" (the app isn't code-signed). Click **More info → Run anyway**. |
-| **macOS** | `Trade Review.app` (inside the `.zip`) | macOS may say it "cannot verify the developer". **Right-click the app → Open → Open** once; after that it opens normally. |
+| **macOS** | `Trade Review.app` (inside the `.zip`) | macOS may say it "cannot verify the developer". Double-click once (it'll be blocked), then go to **System Settings → Privacy & Security**, scroll to the message about Trade Review, and click **Open Anyway**. (On older macOS you can instead right-click the app → **Open**.) |
 
 The download is a single self-contained file — there is nothing to install and no other dependencies.
 
@@ -61,9 +61,13 @@ The download is a single self-contained file — there is nothing to install and
 - **Quit**: click the **power button** (top-right). This stops the app cleanly — closing the browser
   tab alone does *not* stop it.
 
-Your key and all your data live only on this computer, in your user data folder
-(`%APPDATA%\TradeReview` on Windows, `~/.local/share/TradeReview` on macOS/Linux). The app makes a
-backup of its database before every launch.
+Your key and all your data live only on this computer, in your user data folder:
+
+- **Windows**: `%APPDATA%\TradeReview`
+- **macOS**: `~/Library/Application Support/TradeReview`
+- **Linux**: `~/.local/share/TradeReview`
+
+The app makes a backup of its database before every launch.
 
 ## Troubleshooting
 

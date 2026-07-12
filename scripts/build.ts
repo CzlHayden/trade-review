@@ -50,9 +50,11 @@ function resolveTarget(arg: string): TargetSpec {
   }
 }
 
-/** Wrap a built macOS binary in a minimal double-clickable .app bundle (opens with no Terminal). */
-function makeMacApp(distDir: string, binaryPath: string): string {
-  const appDir = join(distDir, `${APP_NAME}.app`);
+/** Wrap a built macOS binary in a minimal double-clickable .app bundle (opens with no Terminal).
+ * `appParent` is arch-scoped so building both mac targets on one machine doesn't clobber a single
+ * shared bundle (the .app inside keeps its user-facing name for zipping). */
+function makeMacApp(appParent: string, binaryPath: string): string {
+  const appDir = join(appParent, `${APP_NAME}.app`);
   const macOsDir = join(appDir, "Contents", "MacOS");
   rmSync(appDir, { recursive: true, force: true });
   mkdirSync(macOsDir, { recursive: true });
@@ -85,7 +87,9 @@ async function main() {
   mkdirSync(distDir, { recursive: true });
   const outPath = join(distDir, spec.outName);
 
-  const args = ["build", "src/app.ts", "--compile", `--target=${spec.bunTarget}`, `--outfile=${outPath}`];
+  // Absolute entry path so the script works regardless of the caller's cwd (e.g. CI).
+  const entry = join(import.meta.dir, "..", "src", "app.ts");
+  const args = ["build", entry, "--compile", `--target=${spec.bunTarget}`, `--outfile=${outPath}`];
   // The Windows console-hiding AND the executable-metadata flags are ALL only accepted when the build
   // runs on Windows (Bun rejects them when cross-compiling). So the release workflow builds the
   // windows target on a windows-latest runner; a cross-compiled .exe from macOS/Linux is a plain,
@@ -109,7 +113,11 @@ async function main() {
   console.log(`✓ ${built}`);
 
   if (spec.os === "darwin") {
-    const app = makeMacApp(distDir, built);
+    // Arch-scoped parent dir so `build darwin-arm64` and `build darwin-x64` don't overwrite one
+    // another's bundle. e.g. dist/app-macos-arm64/Trade Review.app (no collision with the raw binary).
+    const appParent = join(distDir, `app-${spec.outName.replace(/^trade-review-/, "")}`);
+    mkdirSync(appParent, { recursive: true });
+    const app = makeMacApp(appParent, built);
     console.log(`✓ ${app}`);
   }
 }
