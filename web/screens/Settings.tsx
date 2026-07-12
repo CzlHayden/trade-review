@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import { useOpendSettings, usePutOpendSettings } from "../lib/hooks";
 import { DEFAULT_OPEND_PORT } from "../lib/constants";
 
-/** OpenD connection settings — lets a non-technical user point the app at their local OpenD gateway
- * (WebSocket key + port) without environment variables. The key is write-only: the server only ever
- * tells us whether one is saved, never the value, so the field stays blank and "leave blank to keep". */
+/** OpenD connection settings — where a non-technical user points the app at their local OpenD gateway
+ * (WebSocket key + port). The config DB is the single source of truth (no environment variables). The
+ * key is write-only: the server only tells us whether one is saved, never the value, so the field
+ * stays blank with "leave blank to keep". */
 export function Settings() {
   const { data, isLoading } = useOpendSettings();
   const save = usePutOpendSettings();
@@ -21,15 +22,11 @@ export function Settings() {
 
   if (isLoading || !data) return <div className="spinner">Loading…</div>;
 
-  const keyManaged = data.keyManagedByEnv;
-  const portManaged = data.portManagedByEnv;
   const portNum = Number(port);
   const portValid = Number.isInteger(portNum) && portNum >= 1 && portNum <= 65535;
   const trimmedKey = key.trim();
-  // Only count a field as dirty when it's actually editable (not overridden by an env var), so the
-  // Save button never lights up for a change the sync job would ignore.
-  const portDirty = !portManaged && portValid && String(portNum) !== String(data.port);
-  const keyDirty = !keyManaged && trimmedKey.length > 0;
+  const portDirty = portValid && String(portNum) !== String(data.port);
+  const keyDirty = trimmedKey.length > 0;
   const dirty = portValid && (portDirty || keyDirty);
 
   const submit = () => {
@@ -52,17 +49,6 @@ export function Settings() {
           </p>
         </div>
 
-        {(keyManaged || portManaged) && (
-          <div className="callout info" role="status">
-            {keyManaged && portManaged
-              ? "The OpenD key and port are set by environment variables (OPEND_WS_KEY / OPEND_PORT), which override anything saved here."
-              : keyManaged
-                ? "The OpenD key is set by the OPEND_WS_KEY environment variable, which overrides anything saved here."
-                : "The OpenD port is set by the OPEND_PORT environment variable, which overrides anything saved here."}{" "}
-            Unset it to manage that value from this screen.
-          </div>
-        )}
-
         <label style={{ display: "flex", flexDirection: "column", gap: 5 }}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>OpenD port</span>
           <input
@@ -71,7 +57,6 @@ export function Settings() {
             value={port}
             onChange={(e) => setPort(e.target.value)}
             placeholder={String(DEFAULT_OPEND_PORT)}
-            disabled={portManaged}
           />
           {!portValid && <span className="neg" style={{ fontSize: 12 }}>Enter a port between 1 and 65535.</span>}
           <span className="faint" style={{ fontSize: 12 }}>Default is {DEFAULT_OPEND_PORT}.</span>
@@ -86,7 +71,6 @@ export function Settings() {
             value={key}
             onChange={(e) => setKey(e.target.value)}
             placeholder={data.hasKey ? "•••••••• saved — leave blank to keep" : "Paste your OpenD key"}
-            disabled={keyManaged}
           />
           <span className="faint" style={{ fontSize: 12 }}>
             {data.hasKey

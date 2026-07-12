@@ -15,8 +15,9 @@ added later).
 bun run src/app.ts        # backup + migrate DB → serve http://127.0.0.1:8123 → open browser
 ```
 
-- Needs a `.env` (gitignored; copy `.env.example`) with `OPEND_WS_KEY`. **Syncing** also needs the
-  OpenD gateway app running on `OPEND_PORT` (default 33334); without it the UI loads but Sync fails.
+- **Syncing** needs the OpenD gateway app running; without it the UI loads but Sync fails. The OpenD
+  **key + port are set in the app's Settings screen** (stored in the config DB) — no env vars. (The
+  standalone sync CLI `src/sync/run.ts` still reads `OPEND_WS_KEY`/`OPEND_PORT` from `.env`.)
 - The **frontend hot-reloads** (Bun HMR over the `web/` bundle). The **backend does NOT** — after
   editing `src/api/*` or `src/sync/*`, restart the process or you'll debug stale code.
 - `NO_OPEN=1` skips the browser; `PORT=…` overrides 8123.

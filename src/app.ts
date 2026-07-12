@@ -6,7 +6,7 @@ import { openDb } from "./store/db";
 import { runMigrations } from "./store/migrations";
 import { backupDb, backupStamp } from "./store/backup";
 import { dbPath } from "./store/paths";
-import { getRuleConfig, getStoredOpend, resolveOpend } from "./store/config";
+import { getRuleConfig, getStoredOpend, opendConnection } from "./store/config";
 import { cachedCandles } from "./store/candles-cache";
 import { yahooCandles } from "./candles/yahoo";
 import { buildApi } from "./api/routes";
@@ -50,12 +50,8 @@ export function main(): void {
   // serialized (rebuildGuard) — the network pull runs unlocked, so a journal edit never blocks
   // behind slow/unreachable OpenD.
   const syncJob = async (): Promise<SyncResult> => {
-    // Resolve fresh each sync so a key saved in Settings takes effect without a restart. Env still
-    // wins over stored config (dev override).
-    const { key, port } = resolveOpend(getStoredOpend(db), {
-      key: process.env.OPEND_WS_KEY,
-      port: process.env.OPEND_PORT,
-    });
+    // Read fresh each sync so a key saved in Settings takes effect without a restart.
+    const { key, port } = opendConnection(getStoredOpend(db));
     const client = await connectFutu({ port, key });
     try {
       return await runSync({
@@ -84,15 +80,7 @@ export function main(): void {
       }
     }, 150);
   };
-  const api = buildApi(db, {
-    candles,
-    config,
-    sync,
-    now: Date.now,
-    rebuildLock,
-    quit,
-    opendEnv: { key: process.env.OPEND_WS_KEY, port: process.env.OPEND_PORT },
-  });
+  const api = buildApi(db, { candles, config, sync, now: Date.now, rebuildLock, quit });
 
   const server = Bun.serve({
     hostname: "127.0.0.1", // localhost bind is the entire security model (single local user)

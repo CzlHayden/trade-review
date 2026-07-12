@@ -87,13 +87,10 @@ export interface WeeklyView extends WeeklyEntry {
 }
 
 /** OpenD connection settings. The key is write-only over the wire — the server returns `hasKey`, never
- * the key itself. The `*ManagedByEnv` flags say whether an env var (OPEND_WS_KEY / OPEND_PORT) is
- * overriding stored config for that field, so the UI can lock exactly the field sync will ignore. */
+ * the key itself. Set entirely in the app (config DB); there is no environment override. */
 export interface OpendSettings {
   port: number;
   hasKey: boolean;
-  keyManagedByEnv: boolean;
-  portManagedByEnv: boolean;
 }
 
 async function get<T>(path: string): Promise<T> {

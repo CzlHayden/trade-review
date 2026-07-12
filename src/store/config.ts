@@ -50,9 +50,8 @@ export function setConfigValue(db: Database, key: string, value: string): void {
 }
 
 // ---- OpenD connection (key + port) --------------------------------------------
-// Stored in the config table so the packaged, double-clicked app has somewhere to keep the OpenD
-// WebSocket key without the user editing files / setting environment variables. Environment
-// variables still WIN (resolveOpend) so a dev launch can override without touching stored state.
+// The single source of truth is the config table (set via the Settings screen) — so the packaged,
+// double-clicked app is configured entirely in-app, with no environment variables or file editing.
 
 const OPEND_KEY = "opend";
 export const DEFAULT_OPEND_PORT = 33334;
@@ -92,16 +91,8 @@ export function setStoredOpend(db: Database, patch: Partial<StoredOpend>): void 
   setConfigValue(db, OPEND_KEY, JSON.stringify(next));
 }
 
-/** Effective OpenD connection: environment variable > stored config > default. Pure so it's unit
- * tested directly; empty / non-numeric env values are treated as absent. */
-export function resolveOpend(
-  stored: StoredOpend,
-  env: { key?: string; port?: string },
-): { key: string | undefined; port: number } {
-  const envKey = env.key && env.key.length ? env.key : undefined;
-  const key = envKey ?? stored.key ?? undefined;
-  const envPortNum = env.port && env.port.length ? Number(env.port) : NaN;
-  const envPort = Number.isFinite(envPortNum) ? envPortNum : undefined;
-  const port = envPort ?? stored.port ?? DEFAULT_OPEND_PORT;
-  return { key, port };
+/** The connection to hand OpenD: the stored key (undefined when unset) and the stored port (falling
+ * back to the default). Pure, so it's unit tested directly. */
+export function opendConnection(stored: StoredOpend): { key: string | undefined; port: number } {
+  return { key: stored.key ?? undefined, port: stored.port ?? DEFAULT_OPEND_PORT };
 }

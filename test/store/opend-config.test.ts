@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { openTestDb } from "../helpers";
-import { getStoredOpend, setStoredOpend, resolveOpend, setConfigValue, DEFAULT_OPEND_PORT } from "../../src/store/config";
+import { getStoredOpend, setStoredOpend, opendConnection, setConfigValue, DEFAULT_OPEND_PORT } from "../../src/store/config";
 
 test("getStoredOpend returns nulls when nothing is stored", () => {
   const db = openTestDb();
@@ -36,16 +36,10 @@ test("getStoredOpend tolerates a literal null / non-object row", () => {
   expect(getStoredOpend(db)).toEqual({ key: null, port: null });
 });
 
-test("resolveOpend: env overrides stored, else stored, else default port / no key", () => {
-  const stored = { key: "stored-key", port: 40000 };
-  // env wins over stored
-  expect(resolveOpend(stored, { key: "env-key", port: "50000" })).toEqual({ key: "env-key", port: 50000 });
-  // stored used when env is absent
-  expect(resolveOpend(stored, {})).toEqual({ key: "stored-key", port: 40000 });
-  // neither → default port, no key
-  expect(resolveOpend({ key: null, port: null }, {})).toEqual({ key: undefined, port: DEFAULT_OPEND_PORT });
-  // empty-string env is treated as absent (not an override)
-  expect(resolveOpend(stored, { key: "", port: "" })).toEqual({ key: "stored-key", port: 40000 });
-  // a non-numeric env port is ignored (falls back to stored)
-  expect(resolveOpend(stored, { port: "not-a-number" })).toEqual({ key: "stored-key", port: 40000 });
+test("opendConnection: stored key/port, with default port when unset", () => {
+  expect(opendConnection({ key: "stored-key", port: 40000 })).toEqual({ key: "stored-key", port: 40000 });
+  // no key stored → undefined; no port stored → default
+  expect(opendConnection({ key: null, port: null })).toEqual({ key: undefined, port: DEFAULT_OPEND_PORT });
+  // port set, key unset
+  expect(opendConnection({ key: null, port: 41000 })).toEqual({ key: undefined, port: 41000 });
 });
