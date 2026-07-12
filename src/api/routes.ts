@@ -355,11 +355,9 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
       }
 
       // /api/settings/opend — the OpenD connection (WebSocket key + port). Lets the packaged app be
-      // configured by a non-technical user without env vars. The key is WRITE-ONLY over the wire: GET
-      // never returns it, only `hasKey`. `managedByEnv` tells the UI an env var is overriding storage.
+      // configured by a non-technical user without env vars; the config table is the single source of
+      // truth. The key is WRITE-ONLY over the wire: GET returns only the port + `hasKey`, never the key.
       if (seg.length === 3 && seg[1] === "settings" && seg[2] === "opend") {
-        // The config table is the single source of truth (set here). The key is write-only over the
-        // wire — GET returns only the port + whether a key is saved, never the key itself.
         const view = () => {
           const c = opendConnection(getStoredOpend(db));
           return { port: c.port, hasKey: c.key !== undefined };
