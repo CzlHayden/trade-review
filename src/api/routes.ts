@@ -365,8 +365,14 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
         const opendEnv = deps.opendEnv ?? {};
         const view = () => {
           const eff = resolveOpend(getStoredOpend(db), opendEnv);
-          const managedByEnv = !!(opendEnv.key && opendEnv.key.length);
-          return { port: eff.port, hasKey: eff.key !== undefined, managedByEnv };
+          // Report per-field env management, mirroring resolveOpend's own precedence: an env var only
+          // "manages" a field when it will actually override storage. Reporting them separately keeps
+          // the UI honest — e.g. OPEND_PORT set but OPEND_WS_KEY unset must lock the PORT field (sync
+          // uses the env port) while the key field stays editable, not the reverse.
+          const keyManagedByEnv = !!(opendEnv.key && opendEnv.key.length);
+          const portManagedByEnv =
+            !!(opendEnv.port && opendEnv.port.length) && Number.isFinite(Number(opendEnv.port));
+          return { port: eff.port, hasKey: eff.key !== undefined, keyManagedByEnv, portManagedByEnv };
         };
         if (method === "GET") return json(view());
         if (method === "PUT") {
@@ -382,8 +388,9 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
           }
           if (b.key !== undefined) {
             // Only a non-empty string sets the key; the UI omits the field to leave it unchanged.
-            if (typeof b.key !== "string" || b.key.length === 0) {
-              return json({ error: "key must be a non-empty string" }, 400);
+            // Cap the length — an OpenD key is a short token, and readJsonObject has no size limit.
+            if (typeof b.key !== "string" || b.key.length === 0 || b.key.length > 256) {
+              return json({ error: "key must be a non-empty string ≤ 256 chars" }, 400);
             }
             patch.key = b.key;
           }

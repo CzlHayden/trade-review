@@ -589,7 +589,7 @@ test("GET /api/settings/opend reports default port + no key on a fresh DB (no en
   runMigrations(db);
   const app = buildApi(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 0, opendEnv: {} });
   const body: any = await (await app(new Request("http://127.0.0.1:8123/api/settings/opend"))).json();
-  expect(body).toEqual({ port: 33334, hasKey: false, managedByEnv: false });
+  expect(body).toEqual({ port: 33334, hasKey: false, keyManagedByEnv: false, portManagedByEnv: false });
 });
 
 test("PUT /api/settings/opend stores key + port; GET then reports hasKey (never echoes the key)", async () => {
@@ -605,10 +605,10 @@ test("PUT /api/settings/opend stores key + port; GET then reports hasKey (never 
   );
   expect(put.status).toBe(200);
   const putBody: any = await put.json();
-  expect(putBody).toEqual({ port: 44444, hasKey: true, managedByEnv: false });
+  expect(putBody).toEqual({ port: 44444, hasKey: true, keyManagedByEnv: false, portManagedByEnv: false });
   expect(JSON.stringify(putBody)).not.toContain("secret-key"); // secret never leaves the server
   const get: any = await (await app(new Request("http://127.0.0.1:8123/api/settings/opend"))).json();
-  expect(get).toEqual({ port: 44444, hasKey: true, managedByEnv: false });
+  expect(get).toEqual({ port: 44444, hasKey: true, keyManagedByEnv: false, portManagedByEnv: false });
 });
 
 test("PUT /api/settings/opend port-only leaves the saved key intact", async () => {
@@ -619,18 +619,41 @@ test("PUT /api/settings/opend port-only leaves the saved key intact", async () =
   await app(new Request("http://127.0.0.1:8123/api/settings/opend", { method: "PUT", headers: same, body: JSON.stringify({ key: "k1" }) }));
   await app(new Request("http://127.0.0.1:8123/api/settings/opend", { method: "PUT", headers: same, body: JSON.stringify({ port: 40001 }) }));
   const get: any = await (await app(new Request("http://127.0.0.1:8123/api/settings/opend"))).json();
-  expect(get).toEqual({ port: 40001, hasKey: true, managedByEnv: false });
+  expect(get).toEqual({ port: 40001, hasKey: true, keyManagedByEnv: false, portManagedByEnv: false });
 });
 
-test("GET /api/settings/opend flags managedByEnv when the key comes from the environment", async () => {
+test("GET /api/settings/opend flags key vs port env-management independently", async () => {
+  const mk = (opendEnv: { key?: string; port?: string }) => {
+    const db = new Database(":memory:");
+    runMigrations(db);
+    return buildApi(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 0, opendEnv });
+  };
+  // Both from env.
+  expect(await (await mk({ key: "env-key", port: "39000" })(new Request("http://127.0.0.1:8123/api/settings/opend"))).json())
+    .toEqual({ port: 39000, hasKey: true, keyManagedByEnv: true, portManagedByEnv: true });
+  // Port only (the tricky case): sync uses the env port, so it must be reported managed — key is not.
+  expect(await (await mk({ port: "39000" })(new Request("http://127.0.0.1:8123/api/settings/opend"))).json())
+    .toEqual({ port: 39000, hasKey: false, keyManagedByEnv: false, portManagedByEnv: true });
+  // Key only: key managed, port editable (falls back to default).
+  expect(await (await mk({ key: "env-key" })(new Request("http://127.0.0.1:8123/api/settings/opend"))).json())
+    .toEqual({ port: 33334, hasKey: true, keyManagedByEnv: true, portManagedByEnv: false });
+  // Non-numeric env port is NOT managed (resolveOpend ignores it).
+  expect(await (await mk({ port: "nope" })(new Request("http://127.0.0.1:8123/api/settings/opend"))).json())
+    .toEqual({ port: 33334, hasKey: false, keyManagedByEnv: false, portManagedByEnv: false });
+});
+
+test("PUT /api/settings/opend rejects an over-long key", async () => {
   const db = new Database(":memory:");
   runMigrations(db);
-  const app = buildApi(db, {
-    candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 0,
-    opendEnv: { key: "env-key", port: "39000" },
-  });
-  const body: any = await (await app(new Request("http://127.0.0.1:8123/api/settings/opend"))).json();
-  expect(body).toEqual({ port: 39000, hasKey: true, managedByEnv: true });
+  const app = buildApi(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 0, opendEnv: {} });
+  const res = await app(
+    new Request("http://127.0.0.1:8123/api/settings/opend", {
+      method: "PUT",
+      headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+      body: JSON.stringify({ key: "x".repeat(257) }),
+    }),
+  );
+  expect(res.status).toBe(400);
 });
 
 test("PUT /api/settings/opend rejects a bad port and a cross-site request", async () => {

@@ -21,16 +21,22 @@ export function Settings() {
 
   if (isLoading || !data) return <div className="spinner">Loading…</div>;
 
-  const managed = data.managedByEnv;
+  const keyManaged = data.keyManagedByEnv;
+  const portManaged = data.portManagedByEnv;
   const portNum = Number(port);
   const portValid = Number.isInteger(portNum) && portNum >= 1 && portNum <= 65535;
   const trimmedKey = key.trim();
-  const dirty = portValid && (String(portNum) !== String(data.port) || trimmedKey.length > 0);
+  // Only count a field as dirty when it's actually editable (not overridden by an env var), so the
+  // Save button never lights up for a change the sync job would ignore.
+  const portDirty = !portManaged && portValid && String(portNum) !== String(data.port);
+  const keyDirty = !keyManaged && trimmedKey.length > 0;
+  const dirty = portValid && (portDirty || keyDirty);
 
   const submit = () => {
-    if (!portValid || managed) return;
-    const body: { key?: string; port?: number } = { port: portNum };
-    if (trimmedKey.length > 0) body.key = trimmedKey;
+    if (!dirty) return;
+    const body: { key?: string; port?: number } = {};
+    if (portDirty) body.port = portNum;
+    if (keyDirty) body.key = trimmedKey;
     save.mutate(body, { onSuccess: () => setKey("") });
   };
 
@@ -46,10 +52,14 @@ export function Settings() {
           </p>
         </div>
 
-        {managed && (
+        {(keyManaged || portManaged) && (
           <div className="callout info" role="status">
-            The OpenD key is currently set by an <code>OPEND_WS_KEY</code> environment variable, which
-            overrides anything saved here. Unset it to manage the key from this screen.
+            {keyManaged && portManaged
+              ? "The OpenD key and port are set by environment variables (OPEND_WS_KEY / OPEND_PORT), which override anything saved here."
+              : keyManaged
+                ? "The OpenD key is set by the OPEND_WS_KEY environment variable, which overrides anything saved here."
+                : "The OpenD port is set by the OPEND_PORT environment variable, which overrides anything saved here."}{" "}
+            Unset it to manage that value from this screen.
           </div>
         )}
 
@@ -61,7 +71,7 @@ export function Settings() {
             value={port}
             onChange={(e) => setPort(e.target.value)}
             placeholder={String(DEFAULT_OPEND_PORT)}
-            disabled={managed}
+            disabled={portManaged}
           />
           {!portValid && <span className="neg" style={{ fontSize: 12 }}>Enter a port between 1 and 65535.</span>}
           <span className="faint" style={{ fontSize: 12 }}>Default is {DEFAULT_OPEND_PORT}.</span>
@@ -76,7 +86,7 @@ export function Settings() {
             value={key}
             onChange={(e) => setKey(e.target.value)}
             placeholder={data.hasKey ? "•••••••• saved — leave blank to keep" : "Paste your OpenD key"}
-            disabled={managed}
+            disabled={keyManaged}
           />
           <span className="faint" style={{ fontSize: 12 }}>
             {data.hasKey
@@ -86,7 +96,7 @@ export function Settings() {
         </label>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <button className="btn btn-primary" onClick={submit} disabled={!dirty || managed || save.isPending}>
+          <button className="btn btn-primary" onClick={submit} disabled={!dirty || save.isPending}>
             {save.isPending ? "Saving…" : "Save"}
           </button>
           {save.isSuccess && !dirty && <span className="pos" style={{ fontSize: 13 }}>Saved.</span>}

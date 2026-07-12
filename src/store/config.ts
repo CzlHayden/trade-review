@@ -65,7 +65,16 @@ export interface StoredOpend {
 export function getStoredOpend(db: Database): StoredOpend {
   const raw = getConfigValue(db, OPEND_KEY);
   if (!raw) return { key: null, port: null };
-  const p = JSON.parse(raw) as Partial<StoredOpend>;
+  // Degrade to "nothing stored" on a malformed/legacy row rather than throwing — otherwise a corrupt
+  // value would 500 the Settings GET *and* PUT (setStoredOpend reads first, so even the repair path
+  // dies) and throw on every sync. Self-healing: the next successful PUT overwrites the bad row.
+  let p: Partial<StoredOpend> | null;
+  try {
+    p = JSON.parse(raw) as Partial<StoredOpend>;
+  } catch {
+    p = null;
+  }
+  if (p === null || typeof p !== "object") return { key: null, port: null };
   return {
     key: typeof p.key === "string" ? p.key : null,
     port: typeof p.port === "number" ? p.port : null,
