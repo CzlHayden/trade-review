@@ -37,7 +37,16 @@ function orderTranches(fills: RawFill[]): Tranche[] {
 
 /** Did the trader add to the position while it was underwater? Walks per-ORDER tranches, not raw
  * fills — FUTU splits one order into several fills at slightly different prices, and a partial fill
- * printing below the running average is that order finishing, NOT a scale-in into a loser. */
+ * printing below the running average is that order finishing, NOT a scale-in into a loser.
+ *
+ * Known limitation (rare, both directions): a tranche carries its order's notional-weighted price
+ * stamped at the order's EARLIEST fill time. When two partials of one order bracket a separate order
+ * (A-partial, B, A-remainder), B is compared against A's fully-blended basis — fills that hadn't yet
+ * printed when B was placed — so an interleaved add can spuriously fire or an underwater add can be
+ * masked. The alternative (grouping only consecutive same-order fills) reintroduces the very false
+ * positive this rule fixes. Recovering decision-time basis needs order placement timestamps FUTU
+ * doesn't expose; deferred rather than trade one failure mode for another. Same tranche semantics as
+ * improperPyramid. */
 function addedToLoser(trade: Trade, fills: RawFill[]): boolean {
   let qty = 0; // signed
   let costQty = 0;
