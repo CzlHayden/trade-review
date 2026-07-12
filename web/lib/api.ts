@@ -115,6 +115,7 @@ export const api = {
   meta: () => get<Meta>("/api/meta"),
   syncStatus: () => get<SyncStatus>("/api/sync/status"),
   startSync: () => send<SyncStatus>("/api/sync", "POST"),
+  quit: () => send<{ quitting: boolean }>("/api/quit", "POST"),
   putJournal: (id: string, body: Record<string, unknown>) =>
     send<TradeDetail>(`/api/trades/${encodeURIComponent(id)}/journal`, "PUT", body),
   drawings: (id: string) => get<{ drawings: Drawing[] }>(`/api/trades/${encodeURIComponent(id)}/drawings`),

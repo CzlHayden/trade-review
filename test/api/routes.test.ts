@@ -526,3 +526,28 @@ test("sync endpoints 503 when no runner is wired", async () => {
   const res = await app(new Request("http://x/api/sync", { method: "POST" }));
   expect(res.status).toBe(503);
 });
+
+test("POST /api/quit invokes the injected shutdown and 202s", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  let quits = 0;
+  const app = buildApi(db, {
+    candles: noCandles,
+    config: DEFAULT_RULE_CONFIG,
+    sync: null,
+    now: () => 3000,
+    quit: () => {
+      quits += 1;
+    },
+  });
+  const res = await app(new Request("http://x/api/quit", { method: "POST" }));
+  expect(res.status).toBe(202);
+  expect(((await res.json()) as any).quitting).toBe(true);
+  expect(quits).toBe(1);
+});
+
+test("POST /api/quit 503s when no shutdown is wired (e.g. tests / embedded)", async () => {
+  const { app } = await api(); // no quit dep
+  const res = await app(new Request("http://x/api/quit", { method: "POST" }));
+  expect(res.status).toBe(503);
+});
