@@ -578,3 +578,24 @@ table.data tbody tr.clickable {
   color: var(--text-muted);
   margin-bottom: 2px;
 }
+
+/* ---- callout (inline info banner, e.g. Settings) ---- */
+.callout {
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.callout.info {
+  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.callout code {
+  font-size: 11.5px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}

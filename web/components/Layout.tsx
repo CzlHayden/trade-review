@@ -10,6 +10,7 @@ const NAV = [
   { href: "/trades", label: "Trades", icon: "M3 5h14M3 10h14M3 15h9" },
   { href: "/positions", label: "Positions", icon: "M3 15l4-4 3 3 6-7" },
   { href: "/journal", label: "Weekly journal", icon: "M5 3h8l3 3v11H5zM12 3v4h4" },
+  { href: "/settings", label: "Settings", icon: "M8 3h4l.5 2.5 2-1 2 3.5-2 1.5 2 1.5-2 3.5-2-1L12 17H8l-.5-2.5-2 1-2-3.5 2-1.5-2-1.5 2-3.5 2 1z" },
 ];
 
 function Icon({ d }: { d: string }) {

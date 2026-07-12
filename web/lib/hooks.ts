@@ -103,6 +103,17 @@ export function useQuit() {
   return useMutation({ mutationFn: api.quit });
 }
 
+export const useOpendSettings = () =>
+  useQuery({ queryKey: ["opendSettings"], queryFn: api.opendSettings });
+
+export function usePutOpendSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { key?: string; port?: number }) => api.putOpendSettings(body),
+    onSuccess: (data) => qc.setQueryData(["opendSettings"], data),
+  });
+}
+
 /** Surface a toast each time a sync COMPLETES (success or failure), keyed off `finishedAt` changing.
  * The first observed status just seeds the baseline, so a sync that finished before this mount (the
  * common page-load case) never pops a stale toast. */

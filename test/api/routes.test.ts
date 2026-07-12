@@ -584,6 +584,77 @@ test("POST /api/quit rejects a cross-site (drive-by) request without shutting do
   expect(quits).toBe(0);
 });
 
+test("GET /api/settings/opend reports default port + no key on a fresh DB (no env)", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  const app = buildApi(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 0, opendEnv: {} });
+  const body: any = await (await app(new Request("http://127.0.0.1:8123/api/settings/opend"))).json();
+  expect(body).toEqual({ port: 33334, hasKey: false, managedByEnv: false });
+});
+
+test("PUT /api/settings/opend stores key + port; GET then reports hasKey (never echoes the key)", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  const app = buildApi(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 0, opendEnv: {} });
+  const put = await app(
+    new Request("http://127.0.0.1:8123/api/settings/opend", {
+      method: "PUT",
+      headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+      body: JSON.stringify({ key: "secret-key", port: 44444 }),
+    }),
+  );
+  expect(put.status).toBe(200);
+  const putBody: any = await put.json();
+  expect(putBody).toEqual({ port: 44444, hasKey: true, managedByEnv: false });
+  expect(JSON.stringify(putBody)).not.toContain("secret-key"); // secret never leaves the server
+  const get: any = await (await app(new Request("http://127.0.0.1:8123/api/settings/opend"))).json();
+  expect(get).toEqual({ port: 44444, hasKey: true, managedByEnv: false });
+});
+
+test("PUT /api/settings/opend port-only leaves the saved key intact", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  const app = buildApi(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 0, opendEnv: {} });
+  const same = { "content-type": "application/json", "sec-fetch-site": "same-origin" };
+  await app(new Request("http://127.0.0.1:8123/api/settings/opend", { method: "PUT", headers: same, body: JSON.stringify({ key: "k1" }) }));
+  await app(new Request("http://127.0.0.1:8123/api/settings/opend", { method: "PUT", headers: same, body: JSON.stringify({ port: 40001 }) }));
+  const get: any = await (await app(new Request("http://127.0.0.1:8123/api/settings/opend"))).json();
+  expect(get).toEqual({ port: 40001, hasKey: true, managedByEnv: false });
+});
+
+test("GET /api/settings/opend flags managedByEnv when the key comes from the environment", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  const app = buildApi(db, {
+    candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 0,
+    opendEnv: { key: "env-key", port: "39000" },
+  });
+  const body: any = await (await app(new Request("http://127.0.0.1:8123/api/settings/opend"))).json();
+  expect(body).toEqual({ port: 39000, hasKey: true, managedByEnv: true });
+});
+
+test("PUT /api/settings/opend rejects a bad port and a cross-site request", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  const app = buildApi(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 0, opendEnv: {} });
+  const badPort = await app(
+    new Request("http://127.0.0.1:8123/api/settings/opend", {
+      method: "PUT",
+      headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+      body: JSON.stringify({ port: 70000 }),
+    }),
+  );
+  expect(badPort.status).toBe(400);
+  const crossSite = await app(
+    new Request("http://127.0.0.1:8123/api/settings/opend", {
+      method: "PUT",
+      headers: { "content-type": "application/json", "sec-fetch-site": "cross-site" },
+      body: JSON.stringify({ port: 44444 }),
+    }),
+  );
+  expect(crossSite.status).toBe(403);
+});
+
 test("POST /api/quit rejects a non-loopback Host (DNS-rebinding) even if same-origin", async () => {
   const db = new Database(":memory:");
   runMigrations(db);

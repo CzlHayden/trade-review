@@ -17,6 +17,7 @@ import {
   upsertWeeklyEntry,
 } from "../store/journal";
 import { getDrawings, upsertDrawings, type Drawing } from "../store/drawings";
+import { getStoredOpend, setStoredOpend, resolveOpend } from "../store/config";
 import { equityAsOf, latestEquityByCurrency } from "../store/funds";
 import { rebuildDerived } from "../sync/sync";
 import {
@@ -57,6 +58,10 @@ export interface ApiDeps {
   /** Gracefully shut the app down (stop the server + exit the process). Only the real server wires
    * this; tests and any embedded use leave it undefined, so POST /api/quit 503s there. */
   quit?: () => void;
+  /** OpenD connection from the environment (OPEND_WS_KEY / OPEND_PORT). Injected (not read from
+   * process.env in the handler) so tests aren't polluted by the repo's auto-loaded .env. Env still
+   * takes precedence over the value stored via the Settings screen — see resolveOpend. */
+  opendEnv?: { key?: string; port?: string };
   /** Shared with the sync job so journal-triggered rebuilds serialize with a running sync's rebuild
    * (both must not overwrite each other). Defaults to a fresh mutex when omitted (tests). */
   rebuildLock?: Mutex;
@@ -351,6 +356,40 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
       // GET /api/meta
       if (seg.length === 2 && seg[1] === "meta" && method === "GET") {
         return json(metaView(db));
+      }
+
+      // /api/settings/opend — the OpenD connection (WebSocket key + port). Lets the packaged app be
+      // configured by a non-technical user without env vars. The key is WRITE-ONLY over the wire: GET
+      // never returns it, only `hasKey`. `managedByEnv` tells the UI an env var is overriding storage.
+      if (seg.length === 3 && seg[1] === "settings" && seg[2] === "opend") {
+        const opendEnv = deps.opendEnv ?? {};
+        const view = () => {
+          const eff = resolveOpend(getStoredOpend(db), opendEnv);
+          const managedByEnv = !!(opendEnv.key && opendEnv.key.length);
+          return { port: eff.port, hasKey: eff.key !== undefined, managedByEnv };
+        };
+        if (method === "GET") return json(view());
+        if (method === "PUT") {
+          if (!sameOriginLocal(req)) return json({ error: "forbidden" }, 403);
+          const b = await readJsonObject(req);
+          if (!b) return json({ error: "body must be a JSON object" }, 400);
+          const patch: { key?: string; port?: number } = {};
+          if (b.port !== undefined) {
+            if (typeof b.port !== "number" || !Number.isInteger(b.port) || b.port < 1 || b.port > 65535) {
+              return json({ error: "port must be an integer 1..65535" }, 400);
+            }
+            patch.port = b.port;
+          }
+          if (b.key !== undefined) {
+            // Only a non-empty string sets the key; the UI omits the field to leave it unchanged.
+            if (typeof b.key !== "string" || b.key.length === 0) {
+              return json({ error: "key must be a non-empty string" }, 400);
+            }
+            patch.key = b.key;
+          }
+          setStoredOpend(db, patch);
+          return json(view());
+        }
       }
 
       // POST /api/quit — graceful shutdown for the "Quit" button (a windowless/hidden app has no
