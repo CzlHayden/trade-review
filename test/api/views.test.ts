@@ -1,8 +1,8 @@
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/store/migrations";
-import { openPositions, openPositionsByCurrency, metaView, latestSnapshotTime, tradeDetail } from "../../src/api/views";
-import { insertPositionSnapshot } from "../../src/store/repos";
+import { openPositions, openPositionsByCurrency, metaView, latestSnapshotTime, tradeDetail, tradeSizing } from "../../src/api/views";
+import { allTrades, insertPositionSnapshot } from "../../src/store/repos";
 import { insertFunds } from "../../src/store/funds";
 import { setConfigValue, LAST_SNAPSHOT_TIME } from "../../src/store/config";
 
@@ -92,6 +92,35 @@ test("openPositionsByCurrency leaves risk % null when no equity snapshot exists"
   expect(byCurrency[0]!.totalOpenRisk).toBeCloseTo(50);
   expect(byCurrency[0]!.equity).toBeNull();
   expect(byCurrency[0]!.riskPct).toBeNull();
+});
+
+test("tradeSizing: position size as % of account equity, with basis fallback (none → latest → at_open)", () => {
+  const d = db();
+  d.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, close_time, avg_entry, avg_exit, max_qty, realized_pnl, fees, coverage_ok, effective_stop, risk, r_multiple)
+     VALUES ('t1','a','US.AAPL','USD','LONG','closed', 1000, 2000, 100, 110, 10, 100, 0, 1, 95, 50, 2)`,
+  );
+  const trade = allTrades(d)[0]!;
+
+  // No funds → no denominator.
+  const none = tradeSizing(d, trade);
+  expect(none.equityBasis).toBe("none");
+  expect(none.sizePct).toBeNull();
+  expect(none.riskPct).toBeNull();
+  expect(none.positionSize).toBeCloseTo(1000); // 100 × 10
+
+  // Snapshot AFTER the open (t=1500 > 1000) → approximate "latest" basis.
+  insertFunds(d, { account: "a", currency: "USD", totalAssets: 20_000, cash: 0, marketVal: 0, time: 1500 });
+  const latest = tradeSizing(d, trade);
+  expect(latest.equityBasis).toBe("latest");
+  expect(latest.sizePct).toBeCloseTo(0.05); // 1000 / 20000
+
+  // Snapshot at/before the open → precise "at_open" basis takes precedence.
+  insertFunds(d, { account: "a", currency: "USD", totalAssets: 10_000, cash: 0, marketVal: 0, time: 900 });
+  const atOpen = tradeSizing(d, trade);
+  expect(atOpen.equityBasis).toBe("at_open");
+  expect(atOpen.sizePct).toBeCloseTo(0.1); // 1000 / 10000
+  expect(atOpen.riskPct).toBeCloseTo(0.005); // 50 / 10000
 });
 
 test("tradeDetail expresses planned risk as % of equity at open (same currency), null without a snapshot", () => {

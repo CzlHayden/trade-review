@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import type { TradeRow } from "../lib/api";
-import { money, price, rMultiple, signClass, date, holdTime } from "../lib/format";
+import { money, price, rMultiple, signClass, date, holdTime, pct } from "../lib/format";
 import { FlagChips } from "./FlagChips";
 
-type SortKey = "symbol" | "openTime" | "closeTime" | "realizedPnl" | "rMultiple" | "holdSeconds";
+type SortKey = "symbol" | "openTime" | "closeTime" | "realizedPnl" | "rMultiple" | "holdSeconds" | "sizePct";
 
 const COLS: Array<{ key: SortKey | null; label: string; right?: boolean }> = [
   { key: "symbol", label: "Symbol" },
@@ -13,6 +13,7 @@ const COLS: Array<{ key: SortKey | null; label: string; right?: boolean }> = [
   { key: "closeTime", label: "Closed" },
   { key: "holdSeconds", label: "Hold", right: true },
   { key: null, label: "Entry → Exit", right: true },
+  { key: "sizePct", label: "Size %", right: true },
   { key: "realizedPnl", label: "P&L", right: true },
   { key: "rMultiple", label: "R", right: true },
   { key: null, label: "Flags" },
@@ -88,6 +89,16 @@ export function TradesTable({ rows }: { rows: TradeRow[] }) {
                 {price(t.avgEntry, t.currency)}
                 <span className="faint"> → </span>
                 {t.avgExit !== null ? price(t.avgExit, t.currency) : "—"}
+              </td>
+              <td className="right num" title={t.equityBasis === "latest" ? "≈ based on latest equity (no snapshot at open)" : undefined}>
+                {t.sizePct !== null ? (
+                  <>
+                    {t.equityBasis === "latest" ? "≈" : ""}
+                    {pct(t.sizePct)}
+                  </>
+                ) : (
+                  <span className="faint">—</span>
+                )}
               </td>
               <td className={`right num ${signClass(t.realizedPnl)}`}>
                 {t.realizedPnl !== null ? money(t.realizedPnl, t.currency) : "—"}

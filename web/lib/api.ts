@@ -21,6 +21,8 @@ export interface TradeRow extends Trade {
   flags: Flag[];
   setup: string | null;
   tags: string[];
+  sizePct: number | null; // position size as a fraction of account equity ("≈" when basis is "latest")
+  equityBasis: "at_open" | "latest" | "none";
 }
 
 export interface TradeDetail {
