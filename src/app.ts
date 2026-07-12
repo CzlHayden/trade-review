@@ -67,7 +67,20 @@ export function main(): void {
     }
   };
   const sync = new SyncRunner(db, syncJob, Date.now);
-  const api = buildApi(db, { candles, config, sync, now: Date.now, rebuildLock });
+  // Graceful shutdown for the in-app Quit button. Deferred a beat so the 202 flushes to the browser
+  // before we stop serving; then close the DB and exit. `server` is assigned just below (closure).
+  const quit = () => {
+    console.log("Quit requested — shutting down.");
+    setTimeout(() => {
+      try {
+        server.stop(true); // close in-flight connections
+        db.close();
+      } finally {
+        process.exit(0);
+      }
+    }, 150);
+  };
+  const api = buildApi(db, { candles, config, sync, now: Date.now, rebuildLock, quit });
 
   const server = Bun.serve({
     hostname: "127.0.0.1", // localhost bind is the entire security model (single local user)

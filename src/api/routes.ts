@@ -54,6 +54,9 @@ export interface ApiDeps {
   config: RuleConfig;
   sync: SyncRunner | null;
   now: () => number;
+  /** Gracefully shut the app down (stop the server + exit the process). Only the real server wires
+   * this; tests and any embedded use leave it undefined, so POST /api/quit 503s there. */
+  quit?: () => void;
   /** Shared with the sync job so journal-triggered rebuilds serialize with a running sync's rebuild
    * (both must not overwrite each other). Defaults to a fresh mutex when omitted (tests). */
   rebuildLock?: Mutex;
@@ -64,6 +67,23 @@ function json(data: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+/** Guard a destructive, unauthenticated localhost endpoint against cross-site invocation. A bodyless
+ * POST is a CORS *simple request* (no preflight), so without this any web page the user has open could
+ * POST here and, e.g., kill the app. Two independent checks:
+ *   - Sec-Fetch-Site: browsers always send it; a drive-by page arrives as "cross-site"/"same-site",
+ *     our own SPA as "same-origin". Non-browser callers (curl, tests) omit it — not the CSRF threat.
+ *   - Host must be loopback: defeats DNS-rebinding, where a rebound attacker host is same-origin to
+ *     itself (so Sec-Fetch-Site passes) but its Host header is not 127.0.0.1/localhost. */
+function sameOriginLocal(req: Request): boolean {
+  const site = req.headers.get("sec-fetch-site");
+  if (site !== null && site !== "same-origin" && site !== "none") return false;
+  const host = req.headers.get("host");
+  if (host !== null && !LOOPBACK_HOSTS.has(host.split(":")[0]!)) return false;
+  return true;
 }
 
 /** trade_id → setup (single) and trade_id → tags (multi), for embedding + breakdowns. */
@@ -331,6 +351,16 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
       // GET /api/meta
       if (seg.length === 2 && seg[1] === "meta" && method === "GET") {
         return json(metaView(db));
+      }
+
+      // POST /api/quit — graceful shutdown for the "Quit" button (a windowless/hidden app has no
+      // console to Ctrl+C). 503 when no shutdown is wired (tests, embedded). The dep defers the actual
+      // server-stop/exit so this 202 response flushes to the browser first.
+      if (seg.length === 2 && seg[1] === "quit" && method === "POST") {
+        if (!sameOriginLocal(req)) return json({ error: "forbidden" }, 403);
+        if (!deps.quit) return json({ error: "quit unavailable" }, 503);
+        deps.quit();
+        return json({ quitting: true }, 202);
       }
 
       // POST /api/sync (start; 409 if already running) + GET /api/sync/status

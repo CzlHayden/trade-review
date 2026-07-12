@@ -96,6 +96,13 @@ export function useStartSync() {
   });
 }
 
+/** Ask the local app to shut down (the Quit button). The server 202s, then stops a beat later — so
+ * the browser tab is expected to lose the backend right after this resolves; the caller shows a
+ * "closed" state on success. */
+export function useQuit() {
+  return useMutation({ mutationFn: api.quit });
+}
+
 /** Surface a toast each time a sync COMPLETES (success or failure), keyed off `finishedAt` changing.
  * The first observed status just seeds the baseline, so a sync that finished before this mount (the
  * common page-load case) never pops a stale toast. */

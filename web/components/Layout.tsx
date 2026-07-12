@@ -1,6 +1,7 @@
 import { Link, useLocation } from "wouter";
-import type { ReactNode } from "react";
-import { useSyncStatus, useStartSync, useSyncToasts, useTheme, type ThemeMode } from "../lib/hooks";
+import { useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { useSyncStatus, useStartSync, useSyncToasts, useTheme, useQuit, type ThemeMode } from "../lib/hooks";
 import { dateTime } from "../lib/format";
 import { ToastHost } from "./Toast";
 
@@ -61,6 +62,51 @@ function SyncControl() {
   );
 }
 
+function PowerIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M10 3v7" />
+      <path d="M6 5.5a6 6 0 1 0 8 0" />
+    </svg>
+  );
+}
+
+/** Quit button → graceful backend shutdown. A hidden/windowless app has no console to close, so this
+ * is the intended way out. On success the backend stops within ~150ms, so we replace the screen with
+ * a "closed" notice rather than leave a tab making failing requests. */
+function QuitControl() {
+  const quit = useQuit();
+  const [closed, setClosed] = useState(false);
+  const onQuit = () => {
+    if (!window.confirm("Quit Trade Review? The local app stops — the page and syncing won't work until you start it again.")) return;
+    quit.mutate(undefined, { onSuccess: () => setClosed(true) });
+  };
+  return (
+    <>
+      <button
+        className="btn btn-icon"
+        title="Quit Trade Review (stops the local app)"
+        aria-label="Quit Trade Review"
+        onClick={onQuit}
+        disabled={quit.isPending || closed}
+      >
+        <PowerIcon />
+      </button>
+      {closed &&
+        createPortal(
+          <div className="shutdown-overlay" role="alertdialog" aria-label="Trade Review has shut down">
+            <div className="shutdown-card">
+              <PowerIcon />
+              <strong>Trade Review has shut down</strong>
+              <p>You can close this tab. To use it again, start Trade Review from your desktop.</p>
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
 function ThemeToggle() {
   const { mode, setMode } = useTheme();
   const order: ThemeMode[] = ["system", "light", "dark"];
@@ -99,6 +145,7 @@ export function Layout({ title, children }: { title: string; children: ReactNode
           <div className="topbar-spacer" />
           <SyncControl />
           <ThemeToggle />
+          <QuitControl />
         </header>
         <div className="content">{children}</div>
       </div>
