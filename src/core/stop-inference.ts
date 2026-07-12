@@ -48,14 +48,20 @@ function byTime(a: RawOrder, b: RawOrder): number {
   return orderTime(a) - orderTime(b) || a.id.localeCompare(b.id); // stable tie-break
 }
 
+/** Protective stop-type orders for this trade, earliest → latest. Any closing-side stop-type order
+ * counts — regardless of whether the trigger is below entry (a loss stop) or at/above it (breakeven
+ * or trailed-into-profit stop). Shared by inferStops and protectiveStopTimeline. */
+function protectiveStops(trade: Trade, orders: RawOrder[]): RawOrder[] {
+  return orders
+    .filter((o) => isProtective(trade, o))
+    .filter((o) => STOP_TYPES.has(o.type) && o.triggerPrice !== null)
+    .sort(byTime);
+}
+
 export function inferStops(trade: Trade, orders: RawOrder[]): StopInfo {
   const protective = orders.filter((o) => isProtective(trade, o));
 
-  // Any closing-side stop-type order is a protective stop — regardless of whether the trigger
-  // is below entry (a loss stop) or at/above it (breakeven or trailed-into-profit stop).
-  const stops = protective
-    .filter((o) => STOP_TYPES.has(o.type) && o.triggerPrice !== null)
-    .sort(byTime);
+  const stops = protectiveStops(trade, orders);
 
   // Take-profit: a closing-side limit resting on the profit side of entry.
   const tps = protective

@@ -145,6 +145,11 @@ export interface RuleConfig {
   oversizedMult: number; // flag risk above this multiple of recent-average risk (default 1.5)
   roundTripR: number; // flag a give-back when peak gain reached this many R (default 1)
   revengeMinutes: number; // flag a new trade opened within this many minutes of a losing exit (default 30)
+  excessLossR: number; // flag a realized loss worse than this many R — deeper than plan (default 1.3)
+  maxStopPct: number; // flag an initial stop wider than this fraction of entry (default 0.08 = 8%)
+  pyramidExtendedPct: number; // flag a pyramid add priced above first entry by more than this (default 0.05)
+  overtradeWindowDays: number; // window for the overtrading-frequency count (default 1 day)
+  overtradeMaxOpens: number; // flag when opens within the window exceed this count (default 3)
   enabled: Record<string, boolean>; // ruleId → enabled; missing key = enabled
 }
 
@@ -153,6 +158,11 @@ export const DEFAULT_RULE_CONFIG: RuleConfig = {
   oversizedMult: 1.5,
   roundTripR: 1,
   revengeMinutes: 30,
+  excessLossR: 1.3,
+  maxStopPct: 0.08,
+  pyramidExtendedPct: 0.05,
+  overtradeWindowDays: 1,
+  overtradeMaxOpens: 3,
   enabled: {},
 };
 
@@ -161,6 +171,10 @@ export const DEFAULT_RULE_CONFIG: RuleConfig = {
 export interface RuleContext {
   fills: RawFill[]; // the fills composing THIS trade
   recentClosedTrades: Trade[];
+  // Open times of PRIOR coverage-ok trades in the same account — used by overtrading_freq to count
+  // opens in a rolling window regardless of whether those trades have closed (a swing trader holds
+  // many positions open at once, so closed-before-open would never catch the churn). Undefined = none.
+  recentOpens?: number[];
 }
 
 /** Per-currency aggregate stats (P&L is never summed across currencies). */

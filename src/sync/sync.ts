@@ -262,7 +262,7 @@ export async function rebuildDerived(
     const symbolOrders = allOrders.filter((o) => o.account === t.account && o.symbol === t.symbol);
     const stop = inferStops(t, symbolOrders);
     // Manual stop (if set) overrides inference for BOTH the planned-risk basis and the effective
-    // stop, so risk/R and the held_past_stop rule all read the user's explicit stop. TP is still
+    // stop, so risk/R and the stop-based rules all read the user's explicit stop. TP is still
     // inference-only (no manual TP field in v1).
     const ms = manual.get(t.id);
     const initialStop = ms ?? stop.initialStop; // initial = planned risk (spec §6)
@@ -306,7 +306,12 @@ export async function rebuildDerived(
 
     const fills = allFills.filter((f) => t.fillIds.includes(f.id));
     const recent = recentClosedTrades(enrichedTrades, enriched);
-    const flags = evaluate(enriched, { fills, recentClosedTrades: recent }, config);
+    // recentOpens: open times of prior coverage-ok trades (same account), for overtrading_freq —
+    // by open time, so positions still being held are counted, not just ones closed before this open.
+    const recentOpens = enrichedTrades
+      .filter((p) => p.account === enriched.account && p.coverageOk)
+      .map((p) => p.openTime);
+    const flags = evaluate(enriched, { fills, recentClosedTrades: recent, recentOpens }, config);
 
     enrichedTrades.push(enriched);
     if (flags.length) flagMap.set(enriched.id, flags);

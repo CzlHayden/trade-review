@@ -1,6 +1,7 @@
 import type { Flag, RawFill, RuleConfig, RuleContext, Trade } from "../domain/types";
 
 const EPS = 1e-9;
+const DAY_MS = 24 * 60 * 60_000;
 
 function on(config: RuleConfig, ruleId: string): boolean {
   return config.enabled[ruleId] !== false; // missing = enabled
@@ -36,6 +37,67 @@ function addedToLoser(trade: Trade, fills: RawFill[]): boolean {
       }
       qty += signed;
     }
+  }
+  return false;
+}
+
+interface Tranche {
+  side: "BUY" | "SELL";
+  qty: number;
+  price: number; // notional-weighted average across the order's fills
+  time: number; // earliest fill time of the order
+  id: string; // orderId, for a stable tie-break
+}
+
+/** Collapse fills into one tranche per order — FUTU splits a single order into multiple fills, and a
+ * partial fill is NOT a separate scale-in. Grouping by orderId is what makes the position's real
+ * add/reduce structure visible to the pyramid/size rules. Sorted earliest → latest. */
+function orderTranches(fills: RawFill[]): Tranche[] {
+  const byOrder = new Map<string, { side: "BUY" | "SELL"; qty: number; notional: number; time: number }>();
+  for (const f of fills) {
+    const cur = byOrder.get(f.orderId);
+    if (cur === undefined) {
+      byOrder.set(f.orderId, { side: f.side, qty: f.qty, notional: f.qty * f.price, time: f.time });
+    } else {
+      cur.qty += f.qty;
+      cur.notional += f.qty * f.price;
+      if (f.time < cur.time) cur.time = f.time;
+    }
+  }
+  return [...byOrder.entries()]
+    .map(([id, o]) => ({ side: o.side, qty: o.qty, price: o.notional / o.qty, time: o.time, id }))
+    .sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
+}
+
+/** Did the trader pyramid the wrong way? O'Neil: add only in DECREASING size and near the buy point.
+ * Fires if any add is larger than the opening tranche, or priced more than `extendedPct` past the
+ * first entry (too extended). Works on per-ORDER tranches so partial fills aren't mistaken for adds.
+ *
+ * Known limitation (false-negative only): for a trade OPENED by a reversal fill (a single fill that
+ * flips through zero), buildTrades links the whole reversal fill to this trade, so the opening
+ * tranche's qty is overstated (the real opening is only the post-flip remainder). An oversized later
+ * add can then escape the size check. Rare — swing/position traders close then re-enter rather than
+ * flip — and never a false POSITIVE. A proper fix needs apportioned per-trade fill quantities from
+ * the trade builder; deferred rather than clamp to a wrong number. */
+function improperPyramid(trade: Trade, fills: RawFill[], extendedPct: number): boolean {
+  let qty = 0; // signed
+  let firstQty = 0;
+  let firstPrice = 0;
+  for (const tr of orderTranches(fills)) {
+    const signed = tr.side === "BUY" ? tr.qty : -tr.qty;
+    const isAdd = qty === 0 ? true : Math.sign(signed) === Math.sign(qty);
+    if (qty === 0) {
+      firstQty = tr.qty;
+      firstPrice = tr.price;
+    } else if (isAdd) {
+      if (tr.qty > firstQty + EPS) return true; // add bigger than the initial tranche
+      const tooExtended =
+        trade.direction === "LONG"
+          ? tr.price > firstPrice * (1 + extendedPct) + EPS
+          : tr.price < firstPrice * (1 - extendedPct) - EPS;
+      if (tooExtended) return true;
+    }
+    qty += signed;
   }
   return false;
 }
@@ -80,14 +142,61 @@ export function evaluate(trade: Trade, ctx: RuleContext, config: RuleConfig): Fl
     );
   }
 
-  // held_past_stop
+  // excess_loss — realized loss deeper than the plan (gap, slippage, or a stop not honored).
   if (
-    on(config, "held_past_stop") &&
-    trade.effectiveStop !== null &&
-    trade.mae !== null &&
-    trade.mae > Math.abs(trade.avgEntry - trade.effectiveStop) + EPS
+    on(config, "excess_loss") &&
+    trade.status === "closed" &&
+    trade.rMultiple !== null &&
+    trade.rMultiple < -config.excessLossR - EPS
   ) {
-    add("held_past_stop", "warn", "Price moved beyond your stop but the trade was still held.");
+    add(
+      "excess_loss",
+      "warn",
+      `Loss reached ${trade.rMultiple.toFixed(2)}R — deeper than your planned 1R.`,
+    );
+  }
+
+  // no_stop — no loss-limiting stop basis (risk is null: no stop, profit-side stop, or split-corrupt).
+  if (on(config, "no_stop") && trade.risk === null) {
+    add("no_stop", "warn", "No loss-limiting stop was found for this trade.");
+  }
+
+  // wide_stop — the planned stop sits further than the max-loss cap from entry. Reads `trade.risk`
+  // (= |entry−stop| × size, and null for profit-side/split-corrupted stops) so it inherits risk.ts's
+  // guard and never fires on a profit-protecting stop.
+  if (
+    on(config, "wide_stop") &&
+    trade.risk !== null &&
+    trade.maxQty > EPS &&
+    trade.avgEntry > EPS
+  ) {
+    const stopPct = trade.risk / trade.maxQty / trade.avgEntry;
+    if (stopPct > config.maxStopPct + EPS) {
+      add("wide_stop", "warn", `Stop was ${(stopPct * 100).toFixed(1)}% from entry — wider than your ${config.maxStopPct * 100}% cap.`);
+    }
+  }
+
+  // improper_pyramid — added in increasing size, or too far past the initial buy point.
+  if (on(config, "improper_pyramid") && improperPyramid(trade, ctx.fills, config.pyramidExtendedPct)) {
+    add("improper_pyramid", "info", "Pyramided in increasing size or well past your initial entry.");
+  }
+
+  // overtrading_freq — more new positions opened in the trailing window than the churn threshold.
+  // Counts PRIOR opens by time (ctx.recentOpens), so positions still being held are counted too.
+  if (on(config, "overtrading_freq")) {
+    const windowMs = config.overtradeWindowDays * DAY_MS;
+    const opensInWindow =
+      1 + // this trade
+      (ctx.recentOpens ?? []).filter(
+        (openTime) => trade.openTime - openTime >= 0 && trade.openTime - openTime <= windowMs,
+      ).length;
+    if (opensInWindow > config.overtradeMaxOpens) {
+      add(
+        "overtrading_freq",
+        "info",
+        `${opensInWindow} positions opened within ${config.overtradeWindowDays} day(s).`,
+      );
+    }
   }
 
   // oversized

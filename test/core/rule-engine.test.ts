@@ -8,6 +8,7 @@ function ctx(over: Partial<RuleContext> = {}): RuleContext {
   return {
     fills: over.fills ?? [],
     recentClosedTrades: over.recentClosedTrades ?? [],
+    recentOpens: over.recentOpens,
   };
 }
 function ids(flags: { ruleId: string }[]): string[] {
@@ -46,15 +47,104 @@ test("cut_winner_early: a 2R winner does NOT fire", () => {
   expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).not.toContain("cut_winner_early");
 });
 
-test("held_past_stop: adverse excursion beyond the stop distance", () => {
-  // entry 10, stop 9 → stop distance 1; mae 1.5 → went past the stop.
-  const trade = { ...base(), effectiveStop: 9, mae: 1.5 };
-  expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).toContain("held_past_stop");
+test("held_past_stop is retired — a wick past the stop no longer flags", () => {
+  // The exact NBIS shape: exited ~ −1R at the stop, MAE poked just past it. No warn flag.
+  const trade = { ...base(), effectiveStop: 9, mae: 1.02, rMultiple: -1.0, risk: 100 };
+  const flags = ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG));
+  expect(flags).not.toContain("held_past_stop");
+  expect(flags).not.toContain("excess_loss"); // −1.0R is within plan, not excess
 });
 
-test("held_past_stop: mae within the stop does NOT fire", () => {
-  const trade = { ...base(), effectiveStop: 9, mae: 0.5 };
-  expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).not.toContain("held_past_stop");
+test("excess_loss: a loss materially deeper than 1R fires", () => {
+  const trade = { ...base(), realizedPnl: -150, rMultiple: -1.5, risk: 100 };
+  expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).toContain("excess_loss");
+});
+
+test("excess_loss: a clean −1R stop-out does NOT fire", () => {
+  const trade = { ...base(), realizedPnl: -100, rMultiple: -1.0, risk: 100 };
+  expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).not.toContain("excess_loss");
+});
+
+test("no_stop: a trade with no risk basis (no loss-limiting stop) fires", () => {
+  const trade = { ...base(), risk: null };
+  expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).toContain("no_stop");
+});
+
+test("no_stop: a trade with a loss-limiting stop does NOT fire", () => {
+  const trade = { ...base(), risk: 100 };
+  expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).not.toContain("no_stop");
+});
+
+test("wide_stop: a stop wider than 8% of entry fires", () => {
+  // entry 10, maxQty 100, risk 100 → stop distance (100/100)/10 = 10% > 8% cap.
+  const trade = { ...base(), avgEntry: 10, maxQty: 100, risk: 100 };
+  expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).toContain("wide_stop");
+});
+
+test("wide_stop: a tight stop does NOT fire", () => {
+  // entry 10, maxQty 100, risk 50 → stop distance 5% < 8% cap.
+  const trade = { ...base(), avgEntry: 10, maxQty: 100, risk: 50 };
+  expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).not.toContain("wide_stop");
+});
+
+test("wide_stop: a profit-side / split-corrupted stop (risk null) never fires", () => {
+  // risk.ts nulls risk for profit-side or split-corrupted stops — wide_stop must inherit that guard.
+  const trade = { ...base(), avgEntry: 10, maxQty: 100, risk: null };
+  const flags = ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG));
+  expect(flags).not.toContain("wide_stop");
+});
+
+test("improper_pyramid: an add bigger than the first tranche fires", () => {
+  const fills = [
+    fill("BUY", 100, 10, { time: 1000 }),
+    fill("BUY", 200, 10.1, { time: 2000 }), // larger add, still near the buy point
+    fill("SELL", 300, 11, { time: 3000 }),
+  ];
+  const trade = buildTrades(fills)[0]!;
+  expect(ids(evaluate(trade, ctx({ fills }), DEFAULT_RULE_CONFIG))).toContain("improper_pyramid");
+});
+
+test("improper_pyramid: partial fills of ONE entry order are not pyramid adds", () => {
+  // FUTU splits a single 100-share BUY into 30 then 70 (same orderId). The 70 is not an 'add'
+  // bigger than a 30-share first tranche — it's the same order finishing. Must not flag.
+  const fills = [
+    fill("BUY", 30, 10, { time: 1000, orderId: "entry1" }),
+    fill("BUY", 70, 10.01, { time: 1001, orderId: "entry1" }),
+    fill("SELL", 100, 11, { time: 3000, orderId: "exit1" }),
+  ];
+  const trade = buildTrades(fills)[0]!;
+  expect(ids(evaluate(trade, ctx({ fills }), DEFAULT_RULE_CONFIG))).not.toContain("improper_pyramid");
+});
+
+test("improper_pyramid: a proper decreasing add near the pivot does NOT fire", () => {
+  const fills = [
+    fill("BUY", 100, 10, { time: 1000 }),
+    fill("BUY", 50, 10.2, { time: 2000 }), // smaller add, within 5% of first entry
+    fill("SELL", 150, 11, { time: 3000 }),
+  ];
+  const trade = buildTrades(fills)[0]!;
+  expect(ids(evaluate(trade, ctx({ fills }), DEFAULT_RULE_CONFIG))).not.toContain("improper_pyramid");
+});
+
+test("overtrading_freq: too many opens within the window fires — even when still held", () => {
+  // Four positions opened the same morning and HELD (none closed) — recentOpens counts opens by
+  // time, so the churn is caught where recentClosedTrades would have missed it entirely.
+  const opens = [1_000_000, 1_000_000 + 1000, 1_000_000 + 2000];
+  const trade = { ...base(), id: "o4", openTime: 1_000_000 + 3000 }; // 4th open same day > max 3
+  const flags = ids(evaluate(trade, ctx({ recentOpens: opens }), DEFAULT_RULE_CONFIG));
+  expect(flags).toContain("overtrading_freq");
+});
+
+test("overtrading_freq: opens outside the window do NOT count", () => {
+  const twoDays = 2 * 24 * 60 * 60_000;
+  const opens = [1_000_000, 1_000_000 + twoDays, 1_000_000 + 2 * twoDays];
+  const trade = { ...base(), id: "spread", openTime: 1_000_000 + 3 * twoDays };
+  expect(ids(evaluate(trade, ctx({ recentOpens: opens }), DEFAULT_RULE_CONFIG))).not.toContain("overtrading_freq");
+});
+
+test("overtrading_freq: a lone trade in the window does NOT fire", () => {
+  const trade = { ...base(), id: "solo", openTime: 1_000_000 };
+  expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).not.toContain("overtrading_freq");
 });
 
 test("oversized: risk above 1.5x recent average", () => {
