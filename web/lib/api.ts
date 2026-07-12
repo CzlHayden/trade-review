@@ -86,6 +86,16 @@ export interface WeeklyView extends WeeklyEntry {
   trades: Trade[];
 }
 
+/** OpenD connection settings. The key is write-only over the wire — the server returns `hasKey`, never
+ * the key itself. The `*ManagedByEnv` flags say whether an env var (OPEND_WS_KEY / OPEND_PORT) is
+ * overriding stored config for that field, so the UI can lock exactly the field sync will ignore. */
+export interface OpendSettings {
+  port: number;
+  hasKey: boolean;
+  keyManagedByEnv: boolean;
+  portManagedByEnv: boolean;
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path);
   if (!res.ok) throw new Error(`${path} → ${res.status}`);
@@ -116,6 +126,9 @@ export const api = {
   syncStatus: () => get<SyncStatus>("/api/sync/status"),
   startSync: () => send<SyncStatus>("/api/sync", "POST"),
   quit: () => send<{ quitting: boolean }>("/api/quit", "POST"),
+  opendSettings: () => get<OpendSettings>("/api/settings/opend"),
+  putOpendSettings: (body: { key?: string; port?: number }) =>
+    send<OpendSettings>("/api/settings/opend", "PUT", body),
   putJournal: (id: string, body: Record<string, unknown>) =>
     send<TradeDetail>(`/api/trades/${encodeURIComponent(id)}/journal`, "PUT", body),
   drawings: (id: string) => get<{ drawings: Drawing[] }>(`/api/trades/${encodeURIComponent(id)}/drawings`),

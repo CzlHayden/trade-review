@@ -6,6 +6,7 @@ import { Trades } from "./screens/Trades";
 import { TradeDetail } from "./screens/TradeDetail";
 import { Positions } from "./screens/Positions";
 import { WeeklyJournal } from "./screens/WeeklyJournal";
+import { Settings } from "./screens/Settings";
 
 const qc = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false, retry: 1 } },
@@ -42,6 +43,11 @@ export function App() {
         <Route path="/journal">
           <Layout title="Weekly journal">
             <WeeklyJournal />
+          </Layout>
+        </Route>
+        <Route path="/settings">
+          <Layout title="Settings">
+            <Settings />
           </Layout>
         </Route>
         <Route>

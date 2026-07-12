@@ -48,3 +48,60 @@ export function setConfigValue(db: Database, key: string, value: string): void {
     [key, value],
   );
 }
+
+// ---- OpenD connection (key + port) --------------------------------------------
+// Stored in the config table so the packaged, double-clicked app has somewhere to keep the OpenD
+// WebSocket key without the user editing files / setting environment variables. Environment
+// variables still WIN (resolveOpend) so a dev launch can override without touching stored state.
+
+const OPEND_KEY = "opend";
+export const DEFAULT_OPEND_PORT = 33334;
+
+export interface StoredOpend {
+  key: string | null;
+  port: number | null;
+}
+
+export function getStoredOpend(db: Database): StoredOpend {
+  const raw = getConfigValue(db, OPEND_KEY);
+  if (!raw) return { key: null, port: null };
+  // Degrade to "nothing stored" on a malformed/legacy row rather than throwing — otherwise a corrupt
+  // value would 500 the Settings GET *and* PUT (setStoredOpend reads first, so even the repair path
+  // dies) and throw on every sync. Self-healing: the next successful PUT overwrites the bad row.
+  let p: Partial<StoredOpend> | null;
+  try {
+    p = JSON.parse(raw) as Partial<StoredOpend>;
+  } catch {
+    p = null;
+  }
+  if (p === null || typeof p !== "object") return { key: null, port: null };
+  return {
+    key: typeof p.key === "string" ? p.key : null,
+    port: typeof p.port === "number" ? p.port : null,
+  };
+}
+
+/** Merge a partial patch onto the stored value — an undefined field is left unchanged (so saving the
+ * port alone never wipes a previously-saved key). */
+export function setStoredOpend(db: Database, patch: Partial<StoredOpend>): void {
+  const cur = getStoredOpend(db);
+  const next: StoredOpend = {
+    key: patch.key !== undefined ? patch.key : cur.key,
+    port: patch.port !== undefined ? patch.port : cur.port,
+  };
+  setConfigValue(db, OPEND_KEY, JSON.stringify(next));
+}
+
+/** Effective OpenD connection: environment variable > stored config > default. Pure so it's unit
+ * tested directly; empty / non-numeric env values are treated as absent. */
+export function resolveOpend(
+  stored: StoredOpend,
+  env: { key?: string; port?: string },
+): { key: string | undefined; port: number } {
+  const envKey = env.key && env.key.length ? env.key : undefined;
+  const key = envKey ?? stored.key ?? undefined;
+  const envPortNum = env.port && env.port.length ? Number(env.port) : NaN;
+  const envPort = Number.isFinite(envPortNum) ? envPortNum : undefined;
+  const port = envPort ?? stored.port ?? DEFAULT_OPEND_PORT;
+  return { key, port };
+}
