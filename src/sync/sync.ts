@@ -13,7 +13,7 @@ import type {
   Trade,
 } from "../domain/types";
 import { buildTrades } from "../core/trade-builder";
-import { inferStops } from "../core/stop-inference";
+import { inferStops, protectiveStopTimeline } from "../core/stop-inference";
 import { computeRisk } from "../core/risk";
 import { computeExcursion } from "../core/mae-mfe";
 import { evaluate } from "../core/rule-engine";
@@ -262,7 +262,7 @@ export async function rebuildDerived(
     const symbolOrders = allOrders.filter((o) => o.account === t.account && o.symbol === t.symbol);
     const stop = inferStops(t, symbolOrders);
     // Manual stop (if set) overrides inference for BOTH the planned-risk basis and the effective
-    // stop, so risk/R and the held_past_stop rule all read the user's explicit stop. TP is still
+    // stop, so risk/R and the stop-based rules all read the user's explicit stop. TP is still
     // inference-only (no manual TP field in v1).
     const ms = manual.get(t.id);
     const initialStop = ms ?? stop.initialStop; // initial = planned risk (spec §6)
@@ -306,7 +306,14 @@ export async function rebuildDerived(
 
     const fills = allFills.filter((f) => t.fillIds.includes(f.id));
     const recent = recentClosedTrades(enrichedTrades, enriched);
-    const flags = evaluate(enriched, { fills, recentClosedTrades: recent }, config);
+    // initialStop = the planned stop (manual override else earliest inferred) — the no_stop/wide_stop
+    // basis. stopTimeline = the real protective-order history for loosened_stop (manual stops don't
+    // create orders, so this is order-derived regardless of a manual override).
+    const flags = evaluate(
+      enriched,
+      { fills, recentClosedTrades: recent, initialStop, stopTimeline: protectiveStopTimeline(t, symbolOrders) },
+      config,
+    );
 
     enrichedTrades.push(enriched);
     if (flags.length) flagMap.set(enriched.id, flags);

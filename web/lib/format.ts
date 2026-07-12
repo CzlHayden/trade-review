@@ -78,9 +78,3 @@ export function holdTime(seconds: number | null): string {
   if (d < 14) return `${Math.round(d)}d`;
   return `${Math.round(d / 7)}w`;
 }
-
-/** Turn a ruleId like "held_past_stop" into "Held past stop". */
-export function humanizeRule(ruleId: string): string {
-  const s = ruleId.replace(/_/g, " ");
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}

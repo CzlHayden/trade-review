@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { money, price, pct, rMultiple, signClass, holdTime, humanizeRule } from "../../web/lib/format";
+import { money, price, pct, rMultiple, signClass, holdTime } from "../../web/lib/format";
 
 test("money shows sign + currency symbol, never converts", () => {
   expect(money(1234.5, "USD")).toBe("+$1,234.50");
@@ -37,7 +37,3 @@ test("holdTime buckets seconds; null is open", () => {
   expect(holdTime(21 * 86400)).toBe("3w");
 });
 
-test("humanizeRule prettifies rule ids", () => {
-  expect(humanizeRule("held_past_stop")).toBe("Held past stop");
-  expect(humanizeRule("round_tripped_gain")).toBe("Round tripped gain");
-});

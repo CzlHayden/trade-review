@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTrades, useMeta } from "../lib/hooks";
 import { TradesTable } from "../components/TradesTable";
+import { flagDef } from "../../src/domain/flag-defs";
 
 export function Trades() {
   const trades = useTrades();
@@ -48,7 +49,7 @@ export function Trades() {
           <option value="">All flags</option>
           {allFlags.map((f) => (
             <option key={f} value={f}>
-              {f.replace(/_/g, " ")}
+              {flagDef(f).title}
             </option>
           ))}
         </select>

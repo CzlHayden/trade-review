@@ -1,6 +1,7 @@
 import type { Flag, RawFill, RuleConfig, RuleContext, Trade } from "../domain/types";
 
 const EPS = 1e-9;
+const DAY_MS = 24 * 60 * 60_000;
 
 function on(config: RuleConfig, ruleId: string): boolean {
   return config.enabled[ruleId] !== false; // missing = enabled
@@ -35,6 +36,56 @@ function addedToLoser(trade: Trade, fills: RawFill[]): boolean {
         costVal -= avg * f.qty;
       }
       qty += signed;
+    }
+  }
+  return false;
+}
+
+/** Did the trader pyramid the wrong way? O'Neil: add only in DECREASING size and near the buy point.
+ * Fires if any add is larger than the opening tranche, or priced more than `extendedPct` past the
+ * first entry (too extended). Walks fills; only adds on the position's own side count. */
+function improperPyramid(trade: Trade, fills: RawFill[], extendedPct: number): boolean {
+  const chrono = fills
+    .slice()
+    .sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
+  let qty = 0; // signed
+  let firstQty = 0;
+  let firstPrice = 0;
+  for (const f of chrono) {
+    const signed = f.side === "BUY" ? f.qty : -f.qty;
+    const isAdd = qty === 0 ? true : Math.sign(signed) === Math.sign(qty);
+    if (qty === 0) {
+      firstQty = f.qty;
+      firstPrice = f.price;
+    } else if (isAdd) {
+      if (f.qty > firstQty + EPS) return true; // add bigger than the initial tranche
+      const tooExtended =
+        trade.direction === "LONG"
+          ? f.price > firstPrice * (1 + extendedPct) + EPS
+          : f.price < firstPrice * (1 - extendedPct) - EPS;
+      if (tooExtended) return true;
+    }
+    qty += signed;
+  }
+  return false;
+}
+
+/** Was a protective stop moved FURTHER from price (loosened) over the trade's life? For a long a
+ * loosening is a later trigger below an earlier one; for a short, above. Trailing a stop toward
+ * price (tightening) is good behavior and never fires. */
+function loosenedStop(trade: Trade, timeline: number[]): boolean {
+  if (timeline.length < 2) return false;
+  if (trade.direction === "LONG") {
+    let tightest = timeline[0] as number; // highest trigger seen so far
+    for (const t of timeline.slice(1)) {
+      if (t < tightest - EPS) return true;
+      if (t > tightest) tightest = t;
+    }
+  } else {
+    let tightest = timeline[0] as number; // lowest trigger seen so far
+    for (const t of timeline.slice(1)) {
+      if (t > tightest + EPS) return true;
+      if (t < tightest) tightest = t;
     }
   }
   return false;
@@ -80,14 +131,66 @@ export function evaluate(trade: Trade, ctx: RuleContext, config: RuleConfig): Fl
     );
   }
 
-  // held_past_stop
+  // excess_loss — realized loss deeper than the plan (gap, slippage, or a stop not honored).
   if (
-    on(config, "held_past_stop") &&
-    trade.effectiveStop !== null &&
-    trade.mae !== null &&
-    trade.mae > Math.abs(trade.avgEntry - trade.effectiveStop) + EPS
+    on(config, "excess_loss") &&
+    trade.status === "closed" &&
+    trade.rMultiple !== null &&
+    trade.rMultiple < -config.excessLossR - EPS
   ) {
-    add("held_past_stop", "warn", "Price moved beyond your stop but the trade was still held.");
+    add(
+      "excess_loss",
+      "warn",
+      `Loss reached ${trade.rMultiple.toFixed(2)}R — deeper than your planned 1R.`,
+    );
+  }
+
+  // no_stop — no protective stop / risk basis was ever found for the trade.
+  if (on(config, "no_stop") && (ctx.initialStop === null || ctx.initialStop === undefined)) {
+    add("no_stop", "warn", "No protective stop order was found for this trade.");
+  }
+
+  // wide_stop — the planned stop sits further than the max-loss cap below entry.
+  if (
+    on(config, "wide_stop") &&
+    ctx.initialStop !== null &&
+    ctx.initialStop !== undefined &&
+    trade.avgEntry > EPS
+  ) {
+    const stopPct = Math.abs(trade.avgEntry - ctx.initialStop) / trade.avgEntry;
+    if (stopPct > config.maxStopPct + EPS) {
+      add("wide_stop", "warn", `Initial stop was ${(stopPct * 100).toFixed(1)}% from entry (cap ${(config.maxStopPct * 100).toFixed(0)}%).`);
+    }
+  }
+
+  // loosened_stop — a protective stop was moved further from price during the trade.
+  if (on(config, "loosened_stop") && ctx.stopTimeline !== undefined && loosenedStop(trade, ctx.stopTimeline)) {
+    add("loosened_stop", "warn", "You moved a protective stop further from price.");
+  }
+
+  // improper_pyramid — added in increasing size, or too far past the initial buy point.
+  if (on(config, "improper_pyramid") && improperPyramid(trade, ctx.fills, config.pyramidExtendedPct)) {
+    add("improper_pyramid", "info", "Pyramided in increasing size or well past your initial entry.");
+  }
+
+  // overtrading_freq — more new positions opened in the window than the churn threshold.
+  if (on(config, "overtrading_freq")) {
+    const windowMs = config.overtradeWindowDays * DAY_MS;
+    const opensInWindow =
+      1 + // this trade
+      ctx.recentClosedTrades.filter(
+        (p) =>
+          p.id !== trade.id &&
+          trade.openTime - p.openTime >= 0 &&
+          trade.openTime - p.openTime <= windowMs,
+      ).length;
+    if (opensInWindow > config.overtradeMaxOpens) {
+      add(
+        "overtrading_freq",
+        "info",
+        `${opensInWindow} positions opened within ${config.overtradeWindowDays} day(s).`,
+      );
+    }
   }
 
   // oversized
