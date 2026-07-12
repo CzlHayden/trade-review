@@ -37,7 +37,8 @@ Download the file for your computer from the **[Releases page](https://github.co
 | Your computer | Download | First launch |
 | --- | --- | --- |
 | **Windows** | `trade-review-windows-x64.exe` | Windows may show "Windows protected your PC" (the app isn't code-signed). Click **More info → Run anyway**. |
-| **macOS** | `Trade Review.app` (inside the `.zip`) | macOS may say it "cannot verify the developer". Double-click once (it'll be blocked), then go to **System Settings → Privacy & Security**, scroll to the message about Trade Review, and click **Open Anyway**. (On older macOS you can instead right-click the app → **Open**.) |
+| **Mac (Apple Silicon** — M1/M2/M3/M4, most Macs since 2020**)** | `trade-review-macos-arm64.zip` | Unzip, then: macOS may say it "cannot verify the developer". Double-click once (it'll be blocked), then go to **System Settings → Privacy & Security**, scroll to the message about Trade Review, and click **Open Anyway**. (On older macOS you can instead right-click the app → **Open**.) |
+| **Mac (Intel)** | `trade-review-macos-x64.zip` | Same as above. Not sure which Mac you have? Apple menu → **About This Mac**: "Apple M…" = Apple Silicon, "Intel" = Intel. |
 
 The download is a single self-contained file — there is nothing to install and no other dependencies.
 

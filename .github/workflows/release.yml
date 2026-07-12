@@ -1,0 +1,86 @@
+name: Release
+
+# Cut a release by pushing a version tag:  git tag v0.6.0 && git push origin v0.6.0
+# (workflow_dispatch builds the binaries too, for a dry run, but only a tag publishes a Release.)
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # the release job creates a GitHub Release + uploads assets
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11" # pinned so a Bun update can't silently change a release build
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+      # On a tag build, refuse to ship binaries whose embedded version (from package.json) wouldn't
+      # match the tag — otherwise a forgotten version bump ships v0.7.0 stamped 0.6.0.
+      - name: Verify tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          pkg="$(jq -r .version package.json)"
+          tag="${GITHUB_REF_NAME#v}"
+          echo "package.json=$pkg tag=$tag"
+          [ "$pkg" = "$tag" ] || { echo "::error::tag $GITHUB_REF_NAME does not match package.json version $pkg"; exit 1; }
+
+  build:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: windows-x64, arch: "" }
+          - { os: macos-latest, target: darwin-arm64, arch: arm64 }
+          - { os: macos-latest, target: darwin-x64, arch: x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.11" # pinned so a Bun update can't silently change a release build
+      - run: bun install --frozen-lockfile
+      # Windows metadata + hidden console only apply when building ON Windows — hence windows-latest.
+      - run: bun run build ${{ matrix.target }}
+      # macOS: zip the .app bundle (ditto preserves the bundle structure). The .app lives under an
+      # arch-scoped dir so both mac builds coexist on their runners.
+      - name: Package macOS .app
+        if: matrix.arch != ''
+        run: ditto -c -k --keepParent "dist/app-macos-${{ matrix.arch }}/Trade Review.app" "dist/trade-review-macos-${{ matrix.arch }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.target }}
+          path: |
+            dist/*.exe
+            dist/*.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # find flattens the per-job artifact subdirectories; each asset is uploaded to the Release.
+        # Falls back to `upload --clobber` so re-running the workflow for an existing tag re-attaches
+        # the assets instead of failing on "release already exists".
+        run: |
+          files=$(find artifacts -type f \( -name '*.exe' -o -name '*.zip' \))
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "Trade Review ${{ github.ref_name }}" \
+            --generate-notes \
+            $files \
+          || gh release upload "${{ github.ref_name }}" $files --clobber --repo "${{ github.repository }}"
