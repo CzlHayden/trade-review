@@ -70,27 +70,6 @@ function improperPyramid(trade: Trade, fills: RawFill[], extendedPct: number): b
   return false;
 }
 
-/** Was a protective stop moved FURTHER from price (loosened) over the trade's life? For a long a
- * loosening is a later trigger below an earlier one; for a short, above. Trailing a stop toward
- * price (tightening) is good behavior and never fires. */
-function loosenedStop(trade: Trade, timeline: number[]): boolean {
-  if (timeline.length < 2) return false;
-  if (trade.direction === "LONG") {
-    let tightest = timeline[0] as number; // highest trigger seen so far
-    for (const t of timeline.slice(1)) {
-      if (t < tightest - EPS) return true;
-      if (t > tightest) tightest = t;
-    }
-  } else {
-    let tightest = timeline[0] as number; // lowest trigger seen so far
-    for (const t of timeline.slice(1)) {
-      if (t > tightest + EPS) return true;
-      if (t < tightest) tightest = t;
-    }
-  }
-  return false;
-}
-
 /** Average risk of recent closed trades IN THE SAME CURRENCY (never mix HKD and USD sizes). */
 function avgRecentRisk(recent: Trade[], currency: string): number | null {
   const risks = recent
@@ -145,27 +124,24 @@ export function evaluate(trade: Trade, ctx: RuleContext, config: RuleConfig): Fl
     );
   }
 
-  // no_stop — no protective stop / risk basis was ever found for the trade.
-  if (on(config, "no_stop") && (ctx.initialStop === null || ctx.initialStop === undefined)) {
-    add("no_stop", "warn", "No protective stop order was found for this trade.");
+  // no_stop — no loss-limiting stop basis (risk is null: no stop, profit-side stop, or split-corrupt).
+  if (on(config, "no_stop") && trade.risk === null) {
+    add("no_stop", "warn", "No loss-limiting stop was found for this trade.");
   }
 
-  // wide_stop — the planned stop sits further than the max-loss cap below entry.
+  // wide_stop — the planned stop sits further than the max-loss cap from entry. Reads `trade.risk`
+  // (= |entry−stop| × size, and null for profit-side/split-corrupted stops) so it inherits risk.ts's
+  // guard and never fires on a profit-protecting stop.
   if (
     on(config, "wide_stop") &&
-    ctx.initialStop !== null &&
-    ctx.initialStop !== undefined &&
+    trade.risk !== null &&
+    trade.maxQty > EPS &&
     trade.avgEntry > EPS
   ) {
-    const stopPct = Math.abs(trade.avgEntry - ctx.initialStop) / trade.avgEntry;
+    const stopPct = trade.risk / trade.maxQty / trade.avgEntry;
     if (stopPct > config.maxStopPct + EPS) {
-      add("wide_stop", "warn", `Initial stop was ${(stopPct * 100).toFixed(1)}% from entry (cap ${(config.maxStopPct * 100).toFixed(0)}%).`);
+      add("wide_stop", "warn", `Stop was ${(stopPct * 100).toFixed(1)}% from entry — wider than your ${config.maxStopPct * 100}% cap.`);
     }
-  }
-
-  // loosened_stop — a protective stop was moved further from price during the trade.
-  if (on(config, "loosened_stop") && ctx.stopTimeline !== undefined && loosenedStop(trade, ctx.stopTimeline)) {
-    add("loosened_stop", "warn", "You moved a protective stop further from price.");
   }
 
   // improper_pyramid — added in increasing size, or too far past the initial buy point.
@@ -173,16 +149,14 @@ export function evaluate(trade: Trade, ctx: RuleContext, config: RuleConfig): Fl
     add("improper_pyramid", "info", "Pyramided in increasing size or well past your initial entry.");
   }
 
-  // overtrading_freq — more new positions opened in the window than the churn threshold.
+  // overtrading_freq — more new positions opened in the trailing window than the churn threshold.
+  // Counts PRIOR opens by time (ctx.recentOpens), so positions still being held are counted too.
   if (on(config, "overtrading_freq")) {
     const windowMs = config.overtradeWindowDays * DAY_MS;
     const opensInWindow =
       1 + // this trade
-      ctx.recentClosedTrades.filter(
-        (p) =>
-          p.id !== trade.id &&
-          trade.openTime - p.openTime >= 0 &&
-          trade.openTime - p.openTime <= windowMs,
+      (ctx.recentOpens ?? []).filter(
+        (openTime) => trade.openTime - openTime >= 0 && trade.openTime - openTime <= windowMs,
       ).length;
     if (opensInWindow > config.overtradeMaxOpens) {
       add(

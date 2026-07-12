@@ -171,13 +171,10 @@ export const DEFAULT_RULE_CONFIG: RuleConfig = {
 export interface RuleContext {
   fills: RawFill[]; // the fills composing THIS trade
   recentClosedTrades: Trade[];
-  // The planned protective stop (manual override, else the earliest inferred stop) — the risk basis.
-  // Null when no stop was ever found. Used by no_stop / wide_stop.
-  initialStop?: number | null;
-  // Chronological protective-stop trigger prices for THIS trade (earliest → latest), as the stop was
-  // set/modified. Used by loosened_stop to detect a stop moved further from price. Empty/undefined
-  // when no stop history is available.
-  stopTimeline?: number[];
+  // Open times of PRIOR coverage-ok trades in the same account — used by overtrading_freq to count
+  // opens in a rolling window regardless of whether those trades have closed (a swing trader holds
+  // many positions open at once, so closed-before-open would never catch the churn). Undefined = none.
+  recentOpens?: number[];
 }
 
 /** Per-currency aggregate stats (P&L is never summed across currencies). */

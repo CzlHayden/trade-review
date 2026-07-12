@@ -49,23 +49,33 @@ Replace `held_past_stop` and add field-tier rules. `[F]` unless noted.
 | id | kind | sev | fires when |
 |---|---|---|---|
 | `excess_loss` | outcome | warn | `rMultiple < −excessLossR` (default 1.3R) — loss deeper than plan (gaps/slippage/unhonoured stop) |
-| `loosened_stop` | behavior | warn | a later protective-stop trigger is more adverse than an earlier one (`stopTimeline`) |
-| `no_stop` | behavior | warn | no protective stop / risk basis (`initialStop === null`) |
-| `wide_stop` | behavior | warn | `|entry−initialStop|/entry > maxStopPct` (default 8%) |
+| `no_stop` | behavior | warn | `trade.risk === null` — no loss-limiting stop basis |
+| `wide_stop` | behavior | warn | `(risk/maxQty)/entry > maxStopPct` (default 8%) |
 | `improper_pyramid` | behavior | info | an add is larger than the first tranche, or added `> pyramidExtendedPct` above first entry |
 | `overtrading_freq` | behavior | info | `> overtradeMaxOpens` opens within `overtradeWindowDays` |
 
 `held_past_stop` (old MAE-warn rule) is **removed**. `stop_wicked` (the info-level wick flag) and
 the MAE-resolution fix are **deferred** to their own PR — reintroduce the wick signal only once MAE
-is trustworthy. `no_r_computable` is dropped: in our model `risk===null ⇔ no stop`, so `no_stop`
-already covers it.
+is trustworthy. `no_r_computable` is dropped: in our model `risk===null ⇔ no loss-side stop`, so
+`no_stop` already covers it.
+
+`no_stop`/`wide_stop` read `trade.risk` (= `|entry−stop|×size`, and `null` for profit-side or
+split-corrupted stops per `risk.ts`) so they inherit that guard and never false-fire on a
+profit-protecting stop — a review finding on an earlier draft that keyed off raw stop distance.
+
+**`loosened_stop` is deferred** (was in the first draft, pulled after review). The data can't support
+it correctly yet: FUTU `raw_orders` is upserted by order id, so an in-place ModifyOrder overwrites the
+prior trigger (the common loosening is invisible), while cancel-and-replace plus multi-tier scale-out
+stops produce spurious "loosened" warns. It needs persisted per-modification order history + tier
+handling — a later PR. Shipping it would reintroduce exactly the false-warn-on-good-behaviour this
+branch exists to remove.
 
 ## Plumbing
 
-- `RuleContext` gains optional `initialStop?: number|null` and `stopTimeline?: number[]`
-  (chronological protective-stop triggers). Optional → existing tests still compile.
-- `src/core/stop-inference.ts` exposes a helper returning the chronological protective-stop
-  trigger sequence; `sync.ts` feeds it (and the already-computed `initialStop`) into `RuleContext`.
+- `RuleContext` gains optional `recentOpens?: number[]` — open times of prior coverage-ok trades, so
+  `overtrading_freq` counts opens by time (held positions included), not just trades that closed
+  before this one opened. Optional → existing tests still compile.
+- `src/core/stop-inference.ts` factors a private `protectiveStops()` helper (no new public surface).
 - `RuleConfig` + `DEFAULT_RULE_CONFIG` gain: `excessLossR` (1.3), `maxStopPct` (0.08),
   `pyramidExtendedPct` (0.05), `overtradeWindowDays` (1), `overtradeMaxOpens` (3). Shallow-merge in
   `config.ts` already back-fills these for old stored configs.
@@ -81,7 +91,8 @@ already covers it.
 
 Phase-B [C]/[$] flags (`entry_against_trend`, `extended_entry`, `low_volume_breakout`,
 `chased_gap`, `risk_over_cap`, `over_concentrated`, `sized_up_cold`, `no_breakeven`,
-`low_exit_efficiency`, `no_scale_out`) · `stop_wicked` + MAE-resolution fix · flag→performance &
+`low_exit_efficiency`, `no_scale_out`) · `loosened_stop` (needs persisted order-modification history
++ tier handling) · `stop_wicked` + MAE-resolution fix · flag→performance &
 clean-baseline analytics + drill-down · dismiss/settings UI · `portfolio_heat`, `market_downtrend`
 (index ingest), `ignored_sell_signal`, `laggard_entry`, `conviction_mismatch`. Cut: `poor_entry_fill`,
 `sold_into_weakness` (daily-bar intraday-location guesswork — the smear class of bug).

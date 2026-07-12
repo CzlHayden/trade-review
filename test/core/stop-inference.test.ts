@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { inferStops, protectiveStopTimeline } from "../../src/core/stop-inference";
+import { inferStops } from "../../src/core/stop-inference";
 import { buildTrades } from "../../src/core/trade-builder";
 import { fill, order } from "../helpers";
 
@@ -7,21 +7,6 @@ import { fill, order } from "../helpers";
 function longTrade() {
   return buildTrades([fill("BUY", 100, 10, { time: 60_000 })])[0]!;
 }
-
-test("protectiveStopTimeline returns protective-stop triggers in chronological order", () => {
-  const t = longTrade();
-  const orders = [
-    order("SELL", "STOP", 100, { triggerPrice: 9.5, createTime: 180_000 }),
-    order("SELL", "STOP", 100, { triggerPrice: 9, createTime: 120_000 }),
-    order("SELL", "LIMIT", 100, { price: 13, createTime: 200_000 }), // TP, not a stop
-    order("BUY", "STOP", 100, { triggerPrice: 8, createTime: 130_000 }), // wrong side
-  ];
-  expect(protectiveStopTimeline(t, orders)).toEqual([9, 9.5]);
-});
-
-test("protectiveStopTimeline is empty when no protective stop exists", () => {
-  expect(protectiveStopTimeline(longTrade(), [])).toEqual([]);
-});
 
 test("detects a separate protective SELL STOP for a long", () => {
   const t = longTrade();

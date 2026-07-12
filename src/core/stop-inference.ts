@@ -58,12 +58,6 @@ function protectiveStops(trade: Trade, orders: RawOrder[]): RawOrder[] {
     .sort(byTime);
 }
 
-/** Chronological protective-stop trigger prices for this trade — the stop's life as it was set and
- * modified. Feeds the loosened_stop rule (a later trigger further from price than an earlier one). */
-export function protectiveStopTimeline(trade: Trade, orders: RawOrder[]): number[] {
-  return protectiveStops(trade, orders).map((o) => o.triggerPrice as number);
-}
-
 export function inferStops(trade: Trade, orders: RawOrder[]): StopInfo {
   const protective = orders.filter((o) => isProtective(trade, o));
 

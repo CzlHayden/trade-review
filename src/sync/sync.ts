@@ -13,7 +13,7 @@ import type {
   Trade,
 } from "../domain/types";
 import { buildTrades } from "../core/trade-builder";
-import { inferStops, protectiveStopTimeline } from "../core/stop-inference";
+import { inferStops } from "../core/stop-inference";
 import { computeRisk } from "../core/risk";
 import { computeExcursion } from "../core/mae-mfe";
 import { evaluate } from "../core/rule-engine";
@@ -306,14 +306,12 @@ export async function rebuildDerived(
 
     const fills = allFills.filter((f) => t.fillIds.includes(f.id));
     const recent = recentClosedTrades(enrichedTrades, enriched);
-    // initialStop = the planned stop (manual override else earliest inferred) — the no_stop/wide_stop
-    // basis. stopTimeline = the real protective-order history for loosened_stop (manual stops don't
-    // create orders, so this is order-derived regardless of a manual override).
-    const flags = evaluate(
-      enriched,
-      { fills, recentClosedTrades: recent, initialStop, stopTimeline: protectiveStopTimeline(t, symbolOrders) },
-      config,
-    );
+    // recentOpens: open times of prior coverage-ok trades (same account), for overtrading_freq —
+    // by open time, so positions still being held are counted, not just ones closed before this open.
+    const recentOpens = enrichedTrades
+      .filter((p) => p.account === enriched.account && p.coverageOk)
+      .map((p) => p.openTime);
+    const flags = evaluate(enriched, { fills, recentClosedTrades: recent, recentOpens }, config);
 
     enrichedTrades.push(enriched);
     if (flags.length) flagMap.set(enriched.id, flags);

@@ -8,8 +8,7 @@ function ctx(over: Partial<RuleContext> = {}): RuleContext {
   return {
     fills: over.fills ?? [],
     recentClosedTrades: over.recentClosedTrades ?? [],
-    initialStop: over.initialStop,
-    stopTimeline: over.stopTimeline,
+    recentOpens: over.recentOpens,
   };
 }
 function ids(flags: { ruleId: string }[]): string[] {
@@ -50,55 +49,49 @@ test("cut_winner_early: a 2R winner does NOT fire", () => {
 
 test("held_past_stop is retired — a wick past the stop no longer flags", () => {
   // The exact NBIS shape: exited ~ −1R at the stop, MAE poked just past it. No warn flag.
-  const trade = { ...base(), effectiveStop: 9, mae: 1.02, rMultiple: -1.0 };
-  const flags = ids(evaluate(trade, ctx({ initialStop: 9 }), DEFAULT_RULE_CONFIG));
+  const trade = { ...base(), effectiveStop: 9, mae: 1.02, rMultiple: -1.0, risk: 100 };
+  const flags = ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG));
   expect(flags).not.toContain("held_past_stop");
   expect(flags).not.toContain("excess_loss"); // −1.0R is within plan, not excess
 });
 
 test("excess_loss: a loss materially deeper than 1R fires", () => {
-  const trade = { ...base(), realizedPnl: -150, rMultiple: -1.5 };
-  expect(ids(evaluate(trade, ctx({ initialStop: 9 }), DEFAULT_RULE_CONFIG))).toContain("excess_loss");
+  const trade = { ...base(), realizedPnl: -150, rMultiple: -1.5, risk: 100 };
+  expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).toContain("excess_loss");
 });
 
 test("excess_loss: a clean −1R stop-out does NOT fire", () => {
-  const trade = { ...base(), realizedPnl: -100, rMultiple: -1.0 };
-  expect(ids(evaluate(trade, ctx({ initialStop: 9 }), DEFAULT_RULE_CONFIG))).not.toContain("excess_loss");
+  const trade = { ...base(), realizedPnl: -100, rMultiple: -1.0, risk: 100 };
+  expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).not.toContain("excess_loss");
 });
 
-test("loosened_stop: a stop moved further from price fires", () => {
-  // LONG entry 10; stop started at 9, then widened to 8 (more adverse).
-  const trade = base();
-  const flags = ids(evaluate(trade, ctx({ initialStop: 9, stopTimeline: [9, 8] }), DEFAULT_RULE_CONFIG));
-  expect(flags).toContain("loosened_stop");
+test("no_stop: a trade with no risk basis (no loss-limiting stop) fires", () => {
+  const trade = { ...base(), risk: null };
+  expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).toContain("no_stop");
 });
 
-test("loosened_stop: trailing a stop UP (tightening) does NOT fire", () => {
-  const trade = base();
-  const flags = ids(evaluate(trade, ctx({ initialStop: 9, stopTimeline: [9, 9.5, 9.8] }), DEFAULT_RULE_CONFIG));
-  expect(flags).not.toContain("loosened_stop");
-});
-
-test("no_stop: a trade with no protective stop fires", () => {
-  const trade = base();
-  expect(ids(evaluate(trade, ctx({ initialStop: null }), DEFAULT_RULE_CONFIG))).toContain("no_stop");
-});
-
-test("no_stop: a trade with a stop does NOT fire", () => {
-  const trade = base();
-  expect(ids(evaluate(trade, ctx({ initialStop: 9 }), DEFAULT_RULE_CONFIG))).not.toContain("no_stop");
+test("no_stop: a trade with a loss-limiting stop does NOT fire", () => {
+  const trade = { ...base(), risk: 100 };
+  expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).not.toContain("no_stop");
 });
 
 test("wide_stop: a stop wider than 8% of entry fires", () => {
-  // entry 10, stop 9 → 10% risk band > 8% cap.
-  const trade = { ...base(), avgEntry: 10 };
-  expect(ids(evaluate(trade, ctx({ initialStop: 9 }), DEFAULT_RULE_CONFIG))).toContain("wide_stop");
+  // entry 10, maxQty 100, risk 100 → stop distance (100/100)/10 = 10% > 8% cap.
+  const trade = { ...base(), avgEntry: 10, maxQty: 100, risk: 100 };
+  expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).toContain("wide_stop");
 });
 
 test("wide_stop: a tight stop does NOT fire", () => {
-  // entry 10, stop 9.5 → 5% risk band < 8% cap.
-  const trade = { ...base(), avgEntry: 10 };
-  expect(ids(evaluate(trade, ctx({ initialStop: 9.5 }), DEFAULT_RULE_CONFIG))).not.toContain("wide_stop");
+  // entry 10, maxQty 100, risk 50 → stop distance 5% < 8% cap.
+  const trade = { ...base(), avgEntry: 10, maxQty: 100, risk: 50 };
+  expect(ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG))).not.toContain("wide_stop");
+});
+
+test("wide_stop: a profit-side / split-corrupted stop (risk null) never fires", () => {
+  // risk.ts nulls risk for profit-side or split-corrupted stops — wide_stop must inherit that guard.
+  const trade = { ...base(), avgEntry: 10, maxQty: 100, risk: null };
+  const flags = ids(evaluate(trade, ctx(), DEFAULT_RULE_CONFIG));
+  expect(flags).not.toContain("wide_stop");
 });
 
 test("improper_pyramid: an add bigger than the first tranche fires", () => {
@@ -121,17 +114,20 @@ test("improper_pyramid: a proper decreasing add near the pivot does NOT fire", (
   expect(ids(evaluate(trade, ctx({ fills }), DEFAULT_RULE_CONFIG))).not.toContain("improper_pyramid");
 });
 
-test("overtrading_freq: too many opens within the window fires", () => {
-  const day = 24 * 60 * 60_000;
-  const recent = [
-    { ...base(), id: "o1", openTime: 1_000_000 },
-    { ...base(), id: "o2", openTime: 1_000_000 + 1000 },
-    { ...base(), id: "o3", openTime: 1_000_000 + 2000 },
-  ];
+test("overtrading_freq: too many opens within the window fires — even when still held", () => {
+  // Four positions opened the same morning and HELD (none closed) — recentOpens counts opens by
+  // time, so the churn is caught where recentClosedTrades would have missed it entirely.
+  const opens = [1_000_000, 1_000_000 + 1000, 1_000_000 + 2000];
   const trade = { ...base(), id: "o4", openTime: 1_000_000 + 3000 }; // 4th open same day > max 3
-  const flags = ids(evaluate(trade, ctx({ recentClosedTrades: recent }), DEFAULT_RULE_CONFIG));
+  const flags = ids(evaluate(trade, ctx({ recentOpens: opens }), DEFAULT_RULE_CONFIG));
   expect(flags).toContain("overtrading_freq");
-  expect(day).toBeGreaterThan(0);
+});
+
+test("overtrading_freq: opens outside the window do NOT count", () => {
+  const twoDays = 2 * 24 * 60 * 60_000;
+  const opens = [1_000_000, 1_000_000 + twoDays, 1_000_000 + 2 * twoDays];
+  const trade = { ...base(), id: "spread", openTime: 1_000_000 + 3 * twoDays };
+  expect(ids(evaluate(trade, ctx({ recentOpens: opens }), DEFAULT_RULE_CONFIG))).not.toContain("overtrading_freq");
 });
 
 test("overtrading_freq: a lone trade in the window does NOT fire", () => {

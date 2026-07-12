@@ -15,7 +15,6 @@ const EXPECTED_IDS = [
   "excess_loss",
   "no_stop",
   "wide_stop",
-  "loosened_stop",
   "improper_pyramid",
   "overtrading_freq",
 ] as const;
