@@ -104,6 +104,18 @@ test("improper_pyramid: an add bigger than the first tranche fires", () => {
   expect(ids(evaluate(trade, ctx({ fills }), DEFAULT_RULE_CONFIG))).toContain("improper_pyramid");
 });
 
+test("improper_pyramid: partial fills of ONE entry order are not pyramid adds", () => {
+  // FUTU splits a single 100-share BUY into 30 then 70 (same orderId). The 70 is not an 'add'
+  // bigger than a 30-share first tranche — it's the same order finishing. Must not flag.
+  const fills = [
+    fill("BUY", 30, 10, { time: 1000, orderId: "entry1" }),
+    fill("BUY", 70, 10.01, { time: 1001, orderId: "entry1" }),
+    fill("SELL", 100, 11, { time: 3000, orderId: "exit1" }),
+  ];
+  const trade = buildTrades(fills)[0]!;
+  expect(ids(evaluate(trade, ctx({ fills }), DEFAULT_RULE_CONFIG))).not.toContain("improper_pyramid");
+});
+
 test("improper_pyramid: a proper decreasing add near the pivot does NOT fire", () => {
   const fills = [
     fill("BUY", 100, 10, { time: 1000 }),

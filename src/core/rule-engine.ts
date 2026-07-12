@@ -41,28 +41,53 @@ function addedToLoser(trade: Trade, fills: RawFill[]): boolean {
   return false;
 }
 
+interface Tranche {
+  side: "BUY" | "SELL";
+  qty: number;
+  price: number; // notional-weighted average across the order's fills
+  time: number; // earliest fill time of the order
+  id: string; // orderId, for a stable tie-break
+}
+
+/** Collapse fills into one tranche per order — FUTU splits a single order into multiple fills, and a
+ * partial fill is NOT a separate scale-in. Grouping by orderId is what makes the position's real
+ * add/reduce structure visible to the pyramid/size rules. Sorted earliest → latest. */
+function orderTranches(fills: RawFill[]): Tranche[] {
+  const byOrder = new Map<string, { side: "BUY" | "SELL"; qty: number; notional: number; time: number }>();
+  for (const f of fills) {
+    const cur = byOrder.get(f.orderId);
+    if (cur === undefined) {
+      byOrder.set(f.orderId, { side: f.side, qty: f.qty, notional: f.qty * f.price, time: f.time });
+    } else {
+      cur.qty += f.qty;
+      cur.notional += f.qty * f.price;
+      if (f.time < cur.time) cur.time = f.time;
+    }
+  }
+  return [...byOrder.entries()]
+    .map(([id, o]) => ({ side: o.side, qty: o.qty, price: o.notional / o.qty, time: o.time, id }))
+    .sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
+}
+
 /** Did the trader pyramid the wrong way? O'Neil: add only in DECREASING size and near the buy point.
  * Fires if any add is larger than the opening tranche, or priced more than `extendedPct` past the
- * first entry (too extended). Walks fills; only adds on the position's own side count. */
+ * first entry (too extended). Works on per-ORDER tranches so partial fills aren't mistaken for adds. */
 function improperPyramid(trade: Trade, fills: RawFill[], extendedPct: number): boolean {
-  const chrono = fills
-    .slice()
-    .sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
   let qty = 0; // signed
   let firstQty = 0;
   let firstPrice = 0;
-  for (const f of chrono) {
-    const signed = f.side === "BUY" ? f.qty : -f.qty;
+  for (const tr of orderTranches(fills)) {
+    const signed = tr.side === "BUY" ? tr.qty : -tr.qty;
     const isAdd = qty === 0 ? true : Math.sign(signed) === Math.sign(qty);
     if (qty === 0) {
-      firstQty = f.qty;
-      firstPrice = f.price;
+      firstQty = tr.qty;
+      firstPrice = tr.price;
     } else if (isAdd) {
-      if (f.qty > firstQty + EPS) return true; // add bigger than the initial tranche
+      if (tr.qty > firstQty + EPS) return true; // add bigger than the initial tranche
       const tooExtended =
         trade.direction === "LONG"
-          ? f.price > firstPrice * (1 + extendedPct) + EPS
-          : f.price < firstPrice * (1 - extendedPct) - EPS;
+          ? tr.price > firstPrice * (1 + extendedPct) + EPS
+          : tr.price < firstPrice * (1 - extendedPct) - EPS;
       if (tooExtended) return true;
     }
     qty += signed;
