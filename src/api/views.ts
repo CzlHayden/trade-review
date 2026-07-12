@@ -64,6 +64,32 @@ export function latestSnapshotTime(db: Database): number {
   return snapshotClock(db, 0);
 }
 
+export type EquityBasis = "at_open" | "latest" | "none";
+export interface TradeSizing {
+  accountEquity: number | null; // denominator, in the trade's currency
+  equityBasis: EquityBasis;
+  riskPct: number | null; // planned risk / equity
+  positionSize: number; // capital committed at max size (avgEntry × maxQty)
+  sizePct: number | null; // positionSize / equity
+}
+
+/** Per-trade sizing as a fraction of account equity (SAME currency — never mix). `equityBasis`:
+ * "at_open" when a funds snapshot at/before the open exists (precise), else "latest" (approximate),
+ * else "none". Shared by the trade-detail view and the trades-list rows so both read identical
+ * numbers. */
+export function tradeSizing(db: Database, trade: Trade): TradeSizing {
+  const atOpen = equityAsOf(db, trade.account, trade.currency, trade.openTime);
+  const latest =
+    atOpen === null ? latestEquityByCurrency(db, trade.account).get(trade.currency) ?? null : null;
+  const equity = atOpen ?? latest;
+  const equityBasis: EquityBasis = atOpen !== null ? "at_open" : latest !== null ? "latest" : "none";
+  const usable = equity !== null && equity > 0;
+  const riskPct = trade.risk !== null && usable ? trade.risk / equity : null;
+  const positionSize = trade.avgEntry * trade.maxQty;
+  const sizePct = usable ? positionSize / equity : null;
+  return { accountEquity: equity, equityBasis, riskPct, positionSize, sizePct };
+}
+
 export interface TradeDetail {
   trade: Trade;
   fills: RawFill[];
@@ -100,14 +126,7 @@ export function tradeDetail(db: Database, id: string): TradeDetail | null {
   const orders = allRawOrders(db).filter(
     (o) => o.account === trade.account && o.symbol === trade.symbol,
   );
-  const atOpen = equityAsOf(db, trade.account, trade.currency, trade.openTime);
-  const latest = atOpen === null ? latestEquityByCurrency(db, trade.account).get(trade.currency) ?? null : null;
-  const equity = atOpen ?? latest;
-  const equityBasis = atOpen !== null ? "at_open" : latest !== null ? "latest" : "none";
-  const riskPct =
-    trade.risk !== null && equity !== null && equity > 0 ? trade.risk / equity : null;
-  const positionSize = trade.avgEntry * trade.maxQty;
-  const sizePct = equity !== null && equity > 0 ? positionSize / equity : null;
+  const { accountEquity: equity, equityBasis, riskPct, positionSize, sizePct } = tradeSizing(db, trade);
   // Current holding from the latest snapshot (only meaningful while open; a closed trade is flat).
   const positionAsOf = latestSnapshotTime(db);
   const held =

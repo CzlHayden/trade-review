@@ -24,6 +24,7 @@ import {
   metaView,
   openPositionsByCurrency,
   tradeDetail,
+  tradeSizing,
 } from "./views";
 import type { SyncRunner } from "./sync-runner";
 import { Mutex } from "./mutex";
@@ -84,12 +85,18 @@ function tagsMap(db: Database): Map<string, string[]> {
 function tradesWithMeta(db: Database) {
   const setups = setupMap(db);
   const tags = tagsMap(db);
-  return allTrades(db).map((t) => ({
-    ...t,
-    flags: flagsForTrade(db, t.id),
-    setup: setups.get(t.id) ?? null,
-    tags: tags.get(t.id) ?? [],
-  }));
+  return allTrades(db).map((t) => {
+    const sizing = tradeSizing(db, t);
+    return {
+      ...t,
+      flags: flagsForTrade(db, t.id),
+      setup: setups.get(t.id) ?? null,
+      tags: tags.get(t.id) ?? [],
+      // Position size as % of account equity — the headline sizing metric (see sizing preference).
+      sizePct: sizing.sizePct,
+      equityBasis: sizing.equityBasis,
+    };
+  });
 }
 
 function breakdownBy(db: Database, by: string) {
