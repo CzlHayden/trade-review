@@ -46,7 +46,7 @@ function SyncControl() {
         : "Not synced yet";
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <span className={`status-dot ${dotClass}`} title={title} aria-label={title} />
+      <span className={`status-dot ${dotClass}`} role="img" title={title} aria-label={title} />
       <button
         className={`btn sync-btn${running ? " is-running" : ""}`}
         disabled={running}

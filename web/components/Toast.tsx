@@ -23,7 +23,7 @@ function Toast({ toast, onDismiss }: { toast: ToastData; onDismiss: (id: number)
   return (
     <div
       className={`toast ${toast.kind}`}
-      role="status"
+      role={toast.kind === "err" ? "alert" : "status"}
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
     >

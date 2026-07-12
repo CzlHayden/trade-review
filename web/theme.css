@@ -316,7 +316,7 @@ a {
 }
 @media (prefers-reduced-motion: reduce) {
   .sync-btn.is-running .sync-ico {
-    animation-duration: 1.6s;
+    animation: none; /* "Syncing…" label + disabled state convey status without motion */
   }
   .toast {
     animation: none;
