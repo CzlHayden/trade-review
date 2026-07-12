@@ -97,6 +97,14 @@ clean-baseline analytics + drill-down · dismiss/settings UI · `portfolio_heat`
 (index ingest), `ignored_sell_signal`, `laggard_entry`, `conviction_mismatch`. Cut: `poor_entry_fill`,
 `sold_into_weakness` (daily-bar intraday-location guesswork — the smear class of bug).
 
+## Known limitations (accepted, documented)
+
+- `improper_pyramid` on a **reversal-open** trade (a fill flipping through zero) can miss an oversized
+  add: buildTrades links the whole reversal fill to the new trade, overstating the opening tranche.
+  False-negative only, never a false positive; rare for this trading style. A real fix needs
+  apportioned per-trade fill quantities from the trade builder — deferred. Same latent pattern lives in
+  `added_to_loser` (a separate follow-up).
+
 ## Gates
 
 `bun test` · `bunx tsc --noEmit` · Codex review clean · Fable review clean. Then self-merge.

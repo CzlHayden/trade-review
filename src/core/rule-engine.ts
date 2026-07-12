@@ -71,7 +71,14 @@ function orderTranches(fills: RawFill[]): Tranche[] {
 
 /** Did the trader pyramid the wrong way? O'Neil: add only in DECREASING size and near the buy point.
  * Fires if any add is larger than the opening tranche, or priced more than `extendedPct` past the
- * first entry (too extended). Works on per-ORDER tranches so partial fills aren't mistaken for adds. */
+ * first entry (too extended). Works on per-ORDER tranches so partial fills aren't mistaken for adds.
+ *
+ * Known limitation (false-negative only): for a trade OPENED by a reversal fill (a single fill that
+ * flips through zero), buildTrades links the whole reversal fill to this trade, so the opening
+ * tranche's qty is overstated (the real opening is only the post-flip remainder). An oversized later
+ * add can then escape the size check. Rare — swing/position traders close then re-enter rather than
+ * flip — and never a false POSITIVE. A proper fix needs apportioned per-trade fill quantities from
+ * the trade builder; deferred rather than clamp to a wrong number. */
 function improperPyramid(trade: Trade, fills: RawFill[], extendedPct: number): boolean {
   let qty = 0; // signed
   let firstQty = 0;
