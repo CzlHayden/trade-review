@@ -18,6 +18,7 @@ import {
 } from "../store/journal";
 import { getDrawings, upsertDrawings, type Drawing } from "../store/drawings";
 import { getStoredOpend, setStoredOpend, opendConnection } from "../store/config";
+import type { UpdateStatus } from "./update";
 import { equityAsOf, latestEquityByCurrency } from "../store/funds";
 import { rebuildDerived } from "../sync/sync";
 import {
@@ -58,6 +59,9 @@ export interface ApiDeps {
   /** Gracefully shut the app down (stop the server + exit the process). Only the real server wires
    * this; tests and any embedded use leave it undefined, so POST /api/quit 503s there. */
   quit?: () => void;
+  /** Check GitHub Releases for a newer version (notify-only; never touches the binary). Injected so
+   * tests don't hit the network; when absent, GET /api/update/check reports the feature disabled. */
+  checkUpdate?: () => Promise<UpdateStatus>;
   /** Shared with the sync job so journal-triggered rebuilds serialize with a running sync's rebuild
    * (both must not overwrite each other). Defaults to a fresh mutex when omitted (tests). */
   rebuildLock?: Mutex;
@@ -385,6 +389,15 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
           setStoredOpend(db, patch);
           return json(view());
         }
+      }
+
+      // GET /api/update/check — notify-only version check against GitHub Releases (never modifies the
+      // binary). Reports "disabled" when no checker is wired (tests). The checker itself never throws.
+      if (seg.length === 3 && seg[1] === "update" && seg[2] === "check" && method === "GET") {
+        if (!deps.checkUpdate) {
+          return json({ current: "", latest: null, updateAvailable: false, downloadUrl: null, releaseUrl: null, error: "update check unavailable" });
+        }
+        return json(await deps.checkUpdate());
       }
 
       // POST /api/quit — graceful shutdown for the "Quit" button (a windowless/hidden app has no

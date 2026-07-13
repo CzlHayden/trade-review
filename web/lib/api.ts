@@ -86,6 +86,17 @@ export interface WeeklyView extends WeeklyEntry {
   trades: Trade[];
 }
 
+/** Notify-only update check against GitHub Releases. `downloadUrl` is the asset for this platform (or
+ * null); `error` is set when the check couldn't complete. The app never modifies its own binary. */
+export interface UpdateStatus {
+  current: string;
+  latest: string | null;
+  updateAvailable: boolean;
+  downloadUrl: string | null;
+  releaseUrl: string | null;
+  error: string | null;
+}
+
 /** OpenD connection settings. The key is write-only over the wire — the server returns `hasKey`, never
  * the key itself. Set entirely in the app (config DB); there is no environment override. */
 export interface OpendSettings {
@@ -123,6 +134,7 @@ export const api = {
   syncStatus: () => get<SyncStatus>("/api/sync/status"),
   startSync: () => send<SyncStatus>("/api/sync", "POST"),
   quit: () => send<{ quitting: boolean }>("/api/quit", "POST"),
+  updateCheck: () => get<UpdateStatus>("/api/update/check"),
   opendSettings: () => get<OpendSettings>("/api/settings/opend"),
   putOpendSettings: (body: { key?: string; port?: number }) =>
     send<OpendSettings>("/api/settings/opend", "PUT", body),

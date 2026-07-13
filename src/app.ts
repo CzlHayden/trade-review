@@ -14,6 +14,8 @@ import { SyncRunner } from "./api/sync-runner";
 import { Mutex } from "./api/mutex";
 import { runSync, type SyncResult } from "./sync/sync";
 import { connectFutu } from "./futu/client";
+import { checkForUpdate, type UpdateStatus } from "./api/update";
+import pkg from "../package.json";
 // Bun fullstack HTML import: Bun bundles the referenced React/TS/CSS in dev (with HMR) and EMBEDS the
 // built assets under `bun build --compile`. This is what replaces a separate Vite toolchain.
 import index from "../web/index.html";
@@ -80,7 +82,22 @@ export function main(): void {
       }
     }, 150);
   };
-  const api = buildApi(db, { candles, config, sync, now: Date.now, rebuildLock, quit });
+  // Notify-only update check, cached so navigating around doesn't hammer the GitHub API (unauth = 60
+  // req/hr). Failed checks aren't cached, so a transient outage doesn't suppress checks for hours.
+  const REPO = "keithzrc/trade-review";
+  const UPDATE_TTL_MS = 6 * 60 * 60_000;
+  const appVersion = (pkg as { version?: string }).version ?? "0.0.0";
+  let updateCache: { at: number; status: UpdateStatus } | null = null;
+  const checkUpdate = async (): Promise<UpdateStatus> => {
+    const nowMs = Date.now();
+    if (updateCache && !updateCache.status.error && nowMs - updateCache.at < UPDATE_TTL_MS) {
+      return updateCache.status;
+    }
+    const status = await checkForUpdate({ current: appVersion, platform: process.platform, arch: process.arch, repo: REPO });
+    updateCache = { at: nowMs, status };
+    return status;
+  };
+  const api = buildApi(db, { candles, config, sync, now: Date.now, rebuildLock, quit, checkUpdate });
 
   const server = Bun.serve({
     hostname: "127.0.0.1", // localhost bind is the entire security model (single local user)

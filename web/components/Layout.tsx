@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useSyncStatus, useStartSync, useSyncToasts, useTheme, useQuit, type ThemeMode } from "../lib/hooks";
 import { dateTime } from "../lib/format";
 import { ToastHost } from "./Toast";
+import { UpdateBanner } from "./UpdateBanner";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: "M3 12h4l2-7 4 14 2-7h4" },
@@ -148,7 +149,10 @@ export function Layout({ title, children }: { title: string; children: ReactNode
           <ThemeToggle />
           <QuitControl />
         </header>
-        <div className="content">{children}</div>
+        <div className="content">
+          <UpdateBanner />
+          {children}
+        </div>
       </div>
     </div>
   );
