@@ -35,6 +35,12 @@ export interface OpenPosition {
   stopOutcomeR: number | null; // stopOutcome ÷ initialRisk (signed; ≥ 0 ⇒ free trade)
   unrealizedR: number | null; // unrealized ÷ initialRisk — "how many R up am I now"
   freeTrade: boolean; // stop locks in ≥ breakeven — no downside left
+  // As a fraction of THIS position's account equity (same currency — never mixed), so the row reads
+  // "risking 0.4% of the account" (sizing preference: lead with % of account, not raw $). Signed to
+  // match its dollar figure: stopOutcomePct is − when at risk / + when locked; null when equity unknown.
+  accountEquity: number | null; // latest equity for this account+currency (the % denominator)
+  stopOutcomePct: number | null; // stopOutcome ÷ equity — % of account at stake if stopped now
+  unrealizedPct: number | null; // unrealized ÷ equity — paper P&L as % of account
   tradeId: string | null; // the open trade this holding belongs to → deep-link to its detail page
 }
 
@@ -47,6 +53,17 @@ export function openPositions(db: Database, snapshotTime: number): OpenPosition[
   for (const t of allTrades(db)) {
     if (t.status === "open") tradeBy.set(`${t.account}|${t.symbol}`, t);
   }
+  // Latest equity per account (currency → equity), fetched once per account and reused across its rows.
+  const equityByAccount = new Map<string, Map<string, number>>();
+  const equityFor = (account: string, currency: string): number | null => {
+    let m = equityByAccount.get(account);
+    if (!m) {
+      m = latestEquityByCurrency(db, account);
+      equityByAccount.set(account, m);
+    }
+    const e = m.get(currency);
+    return e !== undefined && e > 0 ? e : null;
+  };
   return snap.map((p) => {
     const trade = tradeBy.get(`${p.account}|${p.symbol}`);
     // Live risk readout: the stop STILL WORKING now (not the effective/ever-seen stop, which may have
@@ -54,6 +71,10 @@ export function openPositions(db: Database, snapshotTime: number): OpenPosition[
     const liveStop = trade?.liveStop ?? null;
     const initialRisk = trade?.risk ?? null;
     const m = positionMetrics({ avgCost: p.avgCost, qty: p.qty, price: p.price, stop: liveStop, initialRisk });
+    // % of account: this position's own account equity, in its own currency (never mixed).
+    const accountEquity = equityFor(p.account, p.currency);
+    const pctOf = (n: number | null): number | null =>
+      n !== null && accountEquity !== null ? n / accountEquity : null;
     return {
       account: p.account,
       symbol: p.symbol,
@@ -70,6 +91,9 @@ export function openPositions(db: Database, snapshotTime: number): OpenPosition[
       stopOutcomeR: m.stopOutcomeR,
       unrealizedR: m.unrealizedR,
       freeTrade: m.freeTrade,
+      accountEquity,
+      stopOutcomePct: pctOf(m.stopOutcome),
+      unrealizedPct: pctOf(m.unrealized),
       tradeId: trade?.id ?? null,
     };
   });

@@ -109,19 +109,20 @@ export function Positions() {
                     <td className="right num">
                       {p.liveStop !== null ? price(p.liveStop, p.currency) : <span className="warn">no stop</span>}
                     </td>
-                    {/* If stopped now: signed R (− at risk / + locked), with the $ beneath and a FREE pill. */}
+                    {/* If stopped now: signed R (− at risk / + locked), the $ beneath, the % of account
+                        below that, and a FREE pill. */}
                     <td className="right num">
                       {p.stopOutcome === null ? (
                         <span className="faint">—</span>
                       ) : (
-                        <RCell r={p.stopOutcomeR} amount={p.stopOutcome} currency={p.currency} badge={p.freeTrade ? "FREE" : undefined} />
+                        <RCell r={p.stopOutcomeR} amount={p.stopOutcome} pct={p.stopOutcomePct} currency={p.currency} badge={p.freeTrade ? "FREE" : undefined} />
                       )}
                     </td>
                     <td className="right num">
                       {p.unrealized === null ? (
                         <span className="faint">—</span>
                       ) : (
-                        <RCell r={p.unrealizedR} amount={p.unrealized} currency={p.currency} />
+                        <RCell r={p.unrealizedR} amount={p.unrealized} pct={p.unrealizedPct} currency={p.currency} />
                       )}
                     </td>
                   </tr>
@@ -146,8 +147,9 @@ function OmitCaveat({ omitted, label, title }: { omitted: number; label: string;
   );
 }
 
-/** A signed R value (primary) with the dollar amount beneath, colored by sign. Optional pill (FREE). */
-function RCell({ r, amount, currency, badge }: { r: number | null; amount: number; currency: string; badge?: string }) {
+/** A signed R value (primary) with the dollar amount beneath and, when known, the % of account below
+ * that — leading with R, then $, then % (sizing preference). Colored by sign. Optional pill (FREE). */
+function RCell({ r, amount, pct: p, currency, badge }: { r: number | null; amount: number; pct?: number | null; currency: string; badge?: string }) {
   const cls = signClass(r ?? amount);
   return (
     <div style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: 1 }}>
@@ -156,6 +158,11 @@ function RCell({ r, amount, currency, badge }: { r: number | null; amount: numbe
         {r !== null ? rMultiple(r) : money(amount, currency)}
       </span>
       {r !== null && <span className="faint" style={{ fontSize: 11 }}>{money(amount, currency)}</span>}
+      {p !== null && p !== undefined && (
+        <span className="faint" style={{ fontSize: 11 }} title="Share of account equity (this currency)">
+          {pct(p)} of acct
+        </span>
+      )}
     </div>
   );
 }
