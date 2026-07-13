@@ -10,12 +10,15 @@ interface Acc {
   direction: Direction;
   openTime: number;
   openId: string; // id of the opening fill (or "seed") — makes the trade id collision-safe
-  entryQty: number;
-  entryValue: number;
-  entryFees: number; // fees paid on entries so far — folded into the cost basis for realized-so-far
+  entryQty: number; // LIFETIME shares entered (never reduced) — feeds avgEntry + closed realizedPnl
+  entryValue: number; // LIFETIME entry notional (never reduced)
   exitQty: number;
   exitValue: number;
-  realizedSoFar: number; // profit BOOKED at each exit using the cost basis as-of that exit (see applyExit)
+  // Moving-average basis of the shares STILL HELD (fees folded in), reduced as shares are sold — the
+  // correct cost basis for realized-so-far, independent of the lifetime entry totals above.
+  remainingQty: number;
+  remainingBasis: number;
+  realizedSoFar: number; // profit BOOKED at each exit against the remaining basis as-of that exit (see applyExit)
   fees: number;
   maxQty: number;
   position: number; // signed
@@ -46,9 +49,10 @@ function newAcc(f: RawFill, direction: Direction, coverageOk: boolean): Acc {
     openId: f.id,
     entryQty: 0,
     entryValue: 0,
-    entryFees: 0,
     exitQty: 0,
     exitValue: 0,
+    remainingQty: 0,
+    remainingBasis: 0,
     realizedSoFar: 0,
     fees: 0,
     maxQty: 0,
@@ -71,9 +75,10 @@ function seedAcc(seed: SeedPosition): Acc {
     openId: "seed",
     entryQty: qtyAbs,
     entryValue: qtyAbs * seed.avgCost, // real cost basis → sane avgEntry/PnL
-    entryFees: 0, // pre-coverage seed carries no known fees
     exitQty: 0,
     exitValue: 0,
+    remainingQty: qtyAbs,
+    remainingBasis: qtyAbs * seed.avgCost, // held shares carry the seed cost basis (no known fees)
     realizedSoFar: 0,
     fees: 0,
     maxQty: qtyAbs,
@@ -89,8 +94,10 @@ function applyEntry(acc: Acc, f: RawFill, qty: number): void {
   const feeShare = f.fee * (qty / f.qty);
   acc.entryQty += qty;
   acc.entryValue += qty * f.price;
-  acc.entryFees += feeShare;
   acc.fees += feeShare;
+  // Grow the held-share basis. A LONG's fee raises its cost; a SHORT's fee lowers its net proceeds.
+  acc.remainingQty += qty;
+  acc.remainingBasis += acc.direction === "LONG" ? qty * f.price + feeShare : qty * f.price - feeShare;
   acc.position += acc.direction === "LONG" ? qty : -qty;
   acc.maxQty = Math.max(acc.maxQty, Math.abs(acc.position));
   acc.lastTime = f.time;
@@ -100,15 +107,17 @@ function applyEntry(acc: Acc, f: RawFill, qty: number): void {
 /** Apply a quantity portion of a fill as an exit (reducing exposure). */
 function applyExit(acc: Acc, f: RawFill, qty: number): void {
   const feeShare = f.fee * (qty / f.qty);
-  // Book the profit for THIS exit at the cost basis as-of now — the running average entry price (incl.
-  // entry fees), NOT the lifetime average (a later add mustn't retroactively re-price an earlier sale).
-  // Summed over exits this is the profit banked so far; at a clean close it equals realizedPnl.
-  const avgEntryPrice = acc.entryQty > 0 ? acc.entryValue / acc.entryQty : 0;
-  const feePerShare = acc.entryQty > 0 ? acc.entryFees / acc.entryQty : 0;
+  // Book profit for THIS exit against the moving-average basis of the shares CURRENTLY held — not the
+  // lifetime entry average (a later add would otherwise re-price shares already sold). Then remove the
+  // sold shares' basis at that same average. Summed over exits = profit banked so far; == realizedPnl
+  // at a clean close, even for interleaved scale-out → add → exit sequences.
+  const avg = acc.remainingQty > 0 ? acc.remainingBasis / acc.remainingQty : 0;
   acc.realizedSoFar +=
     acc.direction === "LONG"
-      ? qty * (f.price - (avgEntryPrice + feePerShare)) - feeShare // sold above basis (basis incl. buy fee) = profit
-      : qty * (avgEntryPrice - feePerShare - f.price) - feeShare; // covered below the net short proceeds = profit
+      ? qty * (f.price - avg) - feeShare // sold above the held basis = profit
+      : qty * (avg - f.price) - feeShare; // covered below the held net proceeds = profit
+  acc.remainingBasis -= qty * avg;
+  acc.remainingQty -= qty;
   acc.exitQty += qty;
   acc.exitValue += qty * f.price;
   acc.fees += feeShare;

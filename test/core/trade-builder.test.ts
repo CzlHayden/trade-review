@@ -84,6 +84,18 @@ test("realizedSoFar books each exit at the cost basis THEN — a later add can't
   expect(t.realizedSoFar).toBeCloseTo(12, 9);
 });
 
+test("realizedSoFar uses the REMAINING basis after a sale, not the lifetime average (interleaved close)", () => {
+  // Buy 10@10, sell 4@13 (banked +12; 6 left @10), buy 10@20 (16 left, basis 60+200=260 → avg 16.25),
+  // sell 16@25 to close → 16×(25−16.25)=140. Total 152. Must equal realizedPnl (proceeds−cost = 152),
+  // NOT the lifetime-average result (which would use avg 15 and overstate).
+  const t = buildTrades([
+    fill("BUY", 10, 10), fill("SELL", 4, 13), fill("BUY", 10, 20), fill("SELL", 16, 25),
+  ])[0]!;
+  expect(t.status).toBe("closed");
+  expect(t.realizedPnl).toBeCloseTo(152, 9);
+  expect(t.realizedSoFar).toBeCloseTo(152, 9); // reconciles with realizedPnl at a clean close
+});
+
 test("realizedSoFar is 0 for an open trade with no exits yet", () => {
   const t = buildTrades([fill("BUY", 100, 10)])[0]!;
   expect(t.realizedSoFar).toBe(0);
