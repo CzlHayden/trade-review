@@ -47,21 +47,38 @@ export interface OpenPosition {
   currency: string;
   qty: number;
   avgCost: number;
+  price: number | null; // current market price (snapshot); null when unknown
   effectiveStop: number | null;
-  openRisk: number | null;
+  stopOutcome: number | null; // signed $ if stopped now (− loss / + locked profit)
+  openRisk: number | null; // loss still exposed (0 = free trade); null when no stop
+  lockedProfit: number | null; // profit locked in if stopped
+  unrealized: number | null; // paper P&L now
+  initialRisk: number | null; // 1R in this currency
+  stopOutcomeR: number | null; // stopOutcome / initialRisk (signed; ≥ 0 ⇒ free trade)
+  unrealizedR: number | null; // unrealized / initialRisk
+  freeTrade: boolean; // stop locks in ≥ breakeven
   tradeId: string | null;
 }
 export interface CurrencyPositions {
   currency: string;
   positions: OpenPosition[];
   totalOpenRisk: number | null;
+  totalLockedProfit: number | null;
+  totalUnrealized: number | null;
   deployed: number;
   equity: number | null;
   riskPct: number | null;
+  unrealizedPct: number | null;
   deployedPct: number | null;
+}
+/** Portfolio totals in R — dimensionless, so these sum across currencies (unlike dollars). */
+export interface RTotals {
+  openRisk: number | null;
+  unrealized: number | null;
 }
 export interface PositionsResponse {
   byCurrency: CurrencyPositions[];
+  rTotals: RTotals;
 }
 
 export interface Meta {

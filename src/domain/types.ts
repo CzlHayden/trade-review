@@ -32,6 +32,7 @@ export interface RawPosition {
   symbol: string;
   qty: number; // signed: positive = long, negative = short
   avgCost: number;
+  price: number | null; // current market price at the snapshot (FUTU's mark); null when unknown
   currency: string;
   time: number; // epoch ms of the snapshot
 }

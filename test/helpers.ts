@@ -25,6 +25,7 @@ export function rawPos(qty: number, avgCost: number, over: Partial<RawPosition> 
     symbol: over.symbol ?? "AAPL",
     qty,
     avgCost,
+    price: over.price ?? null,
     currency: over.currency ?? "USD",
     time: over.time ?? 1000,
   };

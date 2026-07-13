@@ -52,7 +52,7 @@ test("a standalone rebuild reconciles seeds against the snapshot MARKER, not wal
   const db = new Database(":memory:");
   runMigrations(db);
   insertPositionSnapshot(db, [
-    { account: "a", symbol: "US.AAPL", qty: 5, avgCost: 100, currency: "USD", time: 1000 },
+    { account: "a", symbol: "US.AAPL", qty: 5, avgCost: 100, price: null, currency: "USD", time: 1000 },
   ]);
   setConfigValue(db, LAST_SNAPSHOT_TIME, "1000"); // pullRaw would have written this
   upsertRawFills(db, [
@@ -77,7 +77,7 @@ test("a seed-only holding keeps a STABLE trade id across syncs (journal never or
   runMigrations(db);
   upsertSyncState(db, { account: "a", market: "US", lastSyncedTime: 1000, coverageStart: 500 });
   insertPositionSnapshot(db, [
-    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, currency: "USD", time: 1000 },
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, price: null, currency: "USD", time: 1000 },
   ]);
   setConfigValue(db, LAST_SNAPSHOT_TIME, "1000");
   await rebuildDerived(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 1000 });
@@ -86,7 +86,7 @@ test("a seed-only holding keeps a STABLE trade id across syncs (journal never or
   // Next sync advances the snapshot clock; the seed-only holding is unchanged.
   setConfigValue(db, LAST_SNAPSHOT_TIME, "9999999");
   insertPositionSnapshot(db, [
-    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, currency: "USD", time: 9999999 },
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, price: null, currency: "USD", time: 9999999 },
   ]);
   await rebuildDerived(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 9999999 });
   const idB = allTrades(db)[0]!.id;

@@ -648,3 +648,40 @@ table.data tbody tr.clickable {
 .update-banner-close:hover {
   color: var(--text);
 }
+
+/* ---- positions: R summary strip + free-trade pill ---- */
+.r-strip {
+  display: flex;
+  gap: 28px;
+  margin-bottom: 18px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius);
+}
+.r-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.r-stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.r-stat-val {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.free-pill {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 1px 5px;
+  border-radius: 999px;
+  color: var(--pos);
+  background: color-mix(in srgb, var(--pos) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pos) 35%, transparent);
+}

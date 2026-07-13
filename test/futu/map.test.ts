@@ -161,11 +161,11 @@ test("mapOrder: absent update timestamp maps to null updateTime", () => {
 
 test("mapPosition signs qty by side and picks averageCostPrice", () => {
   const long = mapPosition(
-    { positionSide: 0, code: "AAPL", qty: 100, averageCostPrice: 10, currency: 2, trdMarket: 2 },
+    { positionSide: 0, code: "AAPL", qty: 100, averageCostPrice: 10, price: 12.5, currency: 2, trdMarket: 2 },
     "acc1",
     5000,
   );
-  expect(long).toEqual({ account: "acc1", symbol: "US.AAPL", qty: 100, avgCost: 10, currency: "USD", time: 5000 });
+  expect(long).toEqual({ account: "acc1", symbol: "US.AAPL", qty: 100, avgCost: 10, price: 12.5, currency: "USD", time: 5000 });
   const short = mapPosition(
     { positionSide: 1, code: "TSLA", qty: 50, averageCostPrice: 200, currency: 2, trdMarket: 2 },
     "acc1",

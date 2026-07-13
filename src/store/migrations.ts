@@ -169,6 +169,12 @@ export const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
       );
     `);
   },
+  // v8 — capture the current market price FUTU already returns in each position snapshot (we only
+  // stored avg cost + qty). Powers unrealized-P&L / R on open positions. Nullable: rows written by an
+  // older app, and any snapshot where FUTU omits the price, stay NULL.
+  (db) => {
+    db.run(`ALTER TABLE raw_positions ADD COLUMN price REAL;`);
+  },
 ];
 
 export function currentVersion(db: Database): number {

@@ -19,7 +19,7 @@ test("openPositions joins snapshot + open trade and computes open risk per curre
      VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95)`,
   );
   insertPositionSnapshot(d, [
-    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, currency: "USD", time: 5000 },
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, price: null, currency: "USD", time: 5000 },
   ]);
   const pos = openPositions(d, 5000);
   expect(pos).toHaveLength(1);
@@ -34,9 +34,47 @@ test("openPositions leaves open risk null when the open trade has no effective s
      VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1)`,
   );
   insertPositionSnapshot(d, [
-    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, currency: "USD", time: 5000 },
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, price: null, currency: "USD", time: 5000 },
   ]);
   expect(openPositions(d, 5000)[0]!.openRisk).toBeNull();
+});
+
+test("openPositions: a stop above entry is a free trade — zero open risk, locked profit, R cushion + unrealized R", () => {
+  const d = db();
+  // Entry 100, stop 103 (above entry → locked profit), initial risk (1R) = 50, current price 110.
+  d.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop, risk)
+     VALUES ('t1','a','US.SNOW','USD','LONG','open', 1000, 100, 10, 0, 1, 103, 50)`,
+  );
+  insertPositionSnapshot(d, [
+    { account: "a", symbol: "US.SNOW", qty: 10, avgCost: 100, price: 110, currency: "USD", time: 5000 },
+  ]);
+  const p = openPositions(d, 5000)[0]!;
+  expect(p.openRisk).toBe(0); // the bug fix: stop above entry ⇒ no downside risk
+  expect(p.lockedProfit).toBeCloseTo(30); // (103-100)*10
+  expect(p.freeTrade).toBe(true);
+  expect(p.stopOutcomeR).toBeCloseTo(0.6); // +30 / 50
+  expect(p.unrealized).toBeCloseTo(100); // (110-100)*10
+  expect(p.unrealizedR).toBeCloseTo(2); // 100 / 50
+});
+
+test("openPositionsByCurrency: rTotals sum open-risk and unrealized in R across currencies", () => {
+  const d = db();
+  d.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop, risk)
+     VALUES ('t1','a','US.SNOW','USD','LONG','open', 1000, 100, 10, 0, 1, 103, 50)`, // free trade, +2R unrealized
+  );
+  d.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop, risk)
+     VALUES ('t2','a','HK.700','HKD','LONG','open', 1000, 100, 10, 0, 1, 95, 50)`, // -1R at risk, flat
+  );
+  insertPositionSnapshot(d, [
+    { account: "a", symbol: "US.SNOW", qty: 10, avgCost: 100, price: 110, currency: "USD", time: 5000 },
+    { account: "a", symbol: "HK.700", qty: 10, avgCost: 100, price: 100, currency: "HKD", time: 5000 },
+  ]);
+  const { rTotals } = openPositionsByCurrency(d, 5000);
+  expect(rTotals.openRisk).toBeCloseTo(1); // USD free(0) + HKD at-risk(1R)
+  expect(rTotals.unrealized).toBeCloseTo(2); // USD +2R + HKD 0R
 });
 
 test("openPositionsByCurrency totals open risk and computes risk % of latest equity, per currency", () => {
@@ -46,7 +84,7 @@ test("openPositionsByCurrency totals open risk and computes risk % of latest equ
      VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95)`,
   );
   insertPositionSnapshot(d, [
-    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, currency: "USD", time: 5000 },
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, price: null, currency: "USD", time: 5000 },
   ]);
   insertFunds(d, { account: "a", currency: "USD", totalAssets: 10_000, cash: 0, marketVal: 0, time: 5000 });
   const { byCurrency } = openPositionsByCurrency(d, 5000);
@@ -66,8 +104,8 @@ test("openPositionsByCurrency leaves % null when a contributing account lacks eq
             ('t2','b','US.MSFT','USD','LONG','open', 1000, 200, 5, 0, 1, 190)`,
   );
   insertPositionSnapshot(d, [
-    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, currency: "USD", time: 5000 },
-    { account: "b", symbol: "US.MSFT", qty: 5, avgCost: 200, currency: "USD", time: 5000 },
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, price: null, currency: "USD", time: 5000 },
+    { account: "b", symbol: "US.MSFT", qty: 5, avgCost: 200, price: null, currency: "USD", time: 5000 },
   ]);
   // Only account a has equity; account b (same USD group) does not → denominator incomplete.
   insertFunds(d, { account: "a", currency: "USD", totalAssets: 10_000, cash: 0, marketVal: 0, time: 5000 });
@@ -86,7 +124,7 @@ test("openPositionsByCurrency leaves risk % null when no equity snapshot exists"
      VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95)`,
   );
   insertPositionSnapshot(d, [
-    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, currency: "USD", time: 5000 },
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, price: null, currency: "USD", time: 5000 },
   ]);
   const { byCurrency } = openPositionsByCurrency(d, 5000);
   expect(byCurrency[0]!.totalOpenRisk).toBeCloseTo(50);
@@ -164,7 +202,7 @@ test("tradeDetail reports the current holding from the latest snapshot for an op
      VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95, 50)`,
   );
   insertPositionSnapshot(d, [
-    { account: "a", symbol: "US.AAPL", qty: 6, avgCost: 100, currency: "USD", time: 5000 }, // scaled out to 6
+    { account: "a", symbol: "US.AAPL", qty: 6, avgCost: 100, price: null, currency: "USD", time: 5000 }, // scaled out to 6
   ]);
   const det = tradeDetail(d, "t1")!;
   expect(det.currentQty).toBe(6); // from the snapshot, NOT max_qty (10)
@@ -179,7 +217,7 @@ test("tradeDetail current holding is 0 for a closed trade and when no snapshot m
   );
   // A snapshot exists for a DIFFERENT symbol; the closed trade must still report flat.
   insertPositionSnapshot(d, [
-    { account: "a", symbol: "US.MSFT", qty: 3, avgCost: 300, currency: "USD", time: 5000 },
+    { account: "a", symbol: "US.MSFT", qty: 3, avgCost: 300, price: null, currency: "USD", time: 5000 },
   ]);
   expect(tradeDetail(d, "t1")!.currentQty).toBe(0);
 });
@@ -188,7 +226,7 @@ test("latestSnapshotTime prefers the marker, backfilling from stored snapshots w
   const d = db();
   // Migrated (pre-marker) DB: no marker, but raw_positions has the last sync batch → use MAX(time).
   insertPositionSnapshot(d, [
-    { account: "a", symbol: "US.AAPL", qty: 1, avgCost: 1, currency: "USD", time: 4000 },
+    { account: "a", symbol: "US.AAPL", qty: 1, avgCost: 1, price: null, currency: "USD", time: 4000 },
   ]);
   expect(latestSnapshotTime(d)).toBe(4000);
   // A migrated DB whose LAST sync was all-flat wrote no raw_positions row for that batch — prefer the
@@ -226,8 +264,8 @@ test("openPositions carries the open trade's id so the row can deep-link to its 
      VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95)`,
   );
   insertPositionSnapshot(d, [
-    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, currency: "USD", time: 5000 },
-    { account: "a", symbol: "US.NVDA", qty: 5, avgCost: 500, currency: "USD", time: 5000 }, // no trade → null
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, price: null, currency: "USD", time: 5000 },
+    { account: "a", symbol: "US.NVDA", qty: 5, avgCost: 500, price: null, currency: "USD", time: 5000 }, // no trade → null
   ]);
   const pos = openPositions(d, 5000);
   expect(pos.find((p) => p.symbol === "US.AAPL")!.tradeId).toBe("t1");

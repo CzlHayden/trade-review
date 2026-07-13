@@ -86,14 +86,14 @@ export function allRawOrders(db: Database): RawOrder[] {
 
 export function insertPositionSnapshot(db: Database, rows: RawPosition[]): void {
   const stmt = db.prepare(
-    `INSERT OR REPLACE INTO raw_positions (account, symbol, qty, avg_cost, currency, time)
-     VALUES ($account, $symbol, $qty, $avgCost, $currency, $time)`,
+    `INSERT OR REPLACE INTO raw_positions (account, symbol, qty, avg_cost, price, currency, time)
+     VALUES ($account, $symbol, $qty, $avgCost, $price, $currency, $time)`,
   );
   db.transaction(() => {
     for (const p of rows) {
       stmt.run({
         $account: p.account, $symbol: p.symbol, $qty: p.qty, $avgCost: p.avgCost,
-        $currency: p.currency, $time: p.time,
+        $price: p.price, $currency: p.currency, $time: p.time,
       });
     }
   })();
@@ -106,12 +106,12 @@ export function insertPositionSnapshot(db: Database, rows: RawPosition[]): void 
  * would silently return the previous, non-empty batch. */
 export function positionsAt(db: Database, snapshotTime: number): RawPosition[] {
   const rows = db
-    .query(`SELECT account, symbol, qty, avg_cost, currency, time FROM raw_positions
+    .query(`SELECT account, symbol, qty, avg_cost, price, currency, time FROM raw_positions
             WHERE time = ? ORDER BY account ASC, symbol ASC`)
     .all(snapshotTime) as any[];
   return rows.map((r) => ({
     account: r.account, symbol: r.symbol, qty: r.qty, avgCost: r.avg_cost,
-    currency: r.currency, time: r.time,
+    price: r.price ?? null, currency: r.currency, time: r.time,
   }));
 }
 
