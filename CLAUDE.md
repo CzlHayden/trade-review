@@ -12,7 +12,7 @@ added later).
 ## Run it locally
 
 ```bash
-bun run src/app.ts        # backup + migrate DB → serve http://127.0.0.1:8123 → open browser
+bun run src/app.ts        # backup + migrate DB → serve http://127.0.0.1:8124 (dev) → open browser
 ```
 
 - **Syncing** needs the OpenD gateway app running; without it the UI loads but Sync fails. The OpenD
@@ -20,7 +20,8 @@ bun run src/app.ts        # backup + migrate DB → serve http://127.0.0.1:8123 
   standalone sync CLI `src/sync/run.ts` still reads `OPEND_WS_KEY`/`OPEND_PORT` from `.env`.)
 - The **frontend hot-reloads** (Bun HMR over the `web/` bundle). The **backend does NOT** — after
   editing `src/api/*` or `src/sync/*`, restart the process or you'll debug stale code.
-- `NO_OPEN=1` skips the browser; `PORT=…` overrides 8123.
+- `NO_OPEN=1` skips the browser; `PORT=…` overrides the port. Dev-from-source defaults to **8124**;
+  the compiled release binary defaults to **8123**, so a released build and local dev run side by side.
 
 ## Golden rules
 

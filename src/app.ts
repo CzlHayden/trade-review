@@ -109,9 +109,15 @@ export async function main(): Promise<void> {
   };
   const api = buildApi(db, { candles, config, sync, now: Date.now, rebuildLock, quit, checkUpdate });
 
+  // A compiled binary embeds the bundled SPA, so Bun.embeddedFiles is non-empty; a `bun run src/app.ts`
+  // dev process has none. The released binary keeps the canonical 8123; local dev uses 8124 so both can
+  // run side by side (download a release AND hack on source without a port clash). PORT overrides either.
+  const runningFromSource = Bun.embeddedFiles.length === 0;
+  const defaultPort = runningFromSource ? 8124 : 8123;
+
   const server = Bun.serve({
     hostname: "127.0.0.1", // localhost bind is the entire security model (single local user)
-    port: Number(process.env.PORT ?? 8123),
+    port: Number(process.env.PORT ?? defaultPort),
     development: process.env.NODE_ENV !== "production", // HMR + rich errors for `bun run`; off in the binary
     routes: {
       // Most-specific first: API paths hit the JSON handler; everything else serves the bundled SPA
