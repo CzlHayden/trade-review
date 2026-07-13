@@ -17,6 +17,7 @@ function tr(over: Partial<Trade>): Trade {
     avgExit: 11,
     maxQty: over.maxQty ?? 100,
     realizedPnl: over.realizedPnl ?? 0,
+    realizedSoFar: over.realizedSoFar ?? 0,
     fees: 0,
     holdSeconds: 0,
     coverageOk: over.coverageOk ?? true,

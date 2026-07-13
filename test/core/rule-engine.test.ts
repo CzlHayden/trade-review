@@ -247,6 +247,7 @@ function base(): Trade {
     avgExit: 11,
     maxQty: 100,
     realizedPnl: 100,
+    realizedSoFar: 100,
     fees: 0,
     holdSeconds: 1,
     coverageOk: true,

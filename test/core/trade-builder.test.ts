@@ -53,6 +53,52 @@ test("partial scale-out then close", () => {
   expect(trades).toHaveLength(1);
   expect(trades[0]!.avgExit).toBe(13);
   expect(trades[0]!.realizedPnl).toBe(300); // 1300 - 1000
+  expect(trades[0]!.realizedSoFar).toBe(300); // at full close, realizedSoFar == realizedPnl
+});
+
+test("realizedSoFar banks the profit from a partial exit while the trade stays OPEN", () => {
+  // Buy 10 @ 10 (cost 100), sell 4 @ 13 → banked 4×(13−10) = 12; still holding 6 (trade open).
+  const trades = buildTrades([fill("BUY", 10, 10), fill("SELL", 4, 13)]);
+  expect(trades).toHaveLength(1);
+  const t = trades[0]!;
+  expect(t.status).toBe("open");
+  expect(t.realizedPnl).toBeNull(); // full realized P&L is still null until close (analytics unaffected)
+  expect(t.realizedSoFar).toBeCloseTo(12, 9); // but the profit already taken off the table IS captured
+});
+
+test("realizedSoFar nets fees: the exit's own fee + the entry fee on the shares sold", () => {
+  // Buy 10 @ 10 (fee 2 → 0.2/share), sell 4 @ 13 (fee 1). Cost basis of the 4 sold = 10 + 0.2 = 10.2.
+  // Banked = 4×(13 − 10.2) − 1 = 11.2 − 1 = 10.2.
+  const trades = buildTrades([
+    fill("BUY", 10, 10, { fee: 2 }),
+    fill("SELL", 4, 13, { fee: 1 }),
+  ]);
+  expect(trades[0]!.realizedSoFar).toBeCloseTo(10.2, 9);
+});
+
+test("realizedSoFar books each exit at the cost basis THEN — a later add can't re-price an earlier sale", () => {
+  // Buy 10 @ 10, sell 4 @ 13 (basis 10 at that moment → banked +12), THEN buy 10 @ 20 (avg rises to 15).
+  // The sale still banked +12; using the final avg (15) would wrongly report 4×(13−15) = −8.
+  const t = buildTrades([fill("BUY", 10, 10), fill("SELL", 4, 13), fill("BUY", 10, 20)])[0]!;
+  expect(t.status).toBe("open"); // position 10 − 4 + 10 = 16
+  expect(t.realizedSoFar).toBeCloseTo(12, 9);
+});
+
+test("realizedSoFar uses the REMAINING basis after a sale, not the lifetime average (interleaved close)", () => {
+  // Buy 10@10, sell 4@13 (banked +12; 6 left @10), buy 10@20 (16 left, basis 60+200=260 → avg 16.25),
+  // sell 16@25 to close → 16×(25−16.25)=140. Total 152. Must equal realizedPnl (proceeds−cost = 152),
+  // NOT the lifetime-average result (which would use avg 15 and overstate).
+  const t = buildTrades([
+    fill("BUY", 10, 10), fill("SELL", 4, 13), fill("BUY", 10, 20), fill("SELL", 16, 25),
+  ])[0]!;
+  expect(t.status).toBe("closed");
+  expect(t.realizedPnl).toBeCloseTo(152, 9);
+  expect(t.realizedSoFar).toBeCloseTo(152, 9); // reconciles with realizedPnl at a clean close
+});
+
+test("realizedSoFar is 0 for an open trade with no exits yet", () => {
+  const t = buildTrades([fill("BUY", 100, 10)])[0]!;
+  expect(t.realizedSoFar).toBe(0);
 });
 
 test("flip through zero splits into two trades", () => {

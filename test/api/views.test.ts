@@ -53,9 +53,9 @@ test("openPositions: a stop above entry is a free trade — zero open risk, lock
   expect(p.openRisk).toBe(0); // the bug fix: stop above entry ⇒ no downside risk
   expect(p.lockedProfit).toBeCloseTo(30); // (103-100)*10
   expect(p.freeTrade).toBe(true);
-  expect(p.stopOutcomeR).toBeCloseTo(0.6); // +30 / 50
+  expect(p.cushionR).toBeCloseTo(0.6); // +30 / 50
   expect(p.unrealized).toBeCloseTo(100); // (110-100)*10
-  expect(p.unrealizedR).toBeCloseTo(2); // 100 / 50
+  expect(p.totalPnlR).toBeCloseTo(2); // 100 / 50
 });
 
 test("openPositionsByCurrency: rTotals sum open-risk and unrealized in R across currencies", () => {
@@ -74,7 +74,7 @@ test("openPositionsByCurrency: rTotals sum open-risk and unrealized in R across 
   ]);
   const { rTotals } = openPositionsByCurrency(d, 5000);
   expect(rTotals.openRisk).toBeCloseTo(1); // USD free(0) + HKD at-risk(1R)
-  expect(rTotals.unrealized).toBeCloseTo(2); // USD +2R + HKD 0R
+  expect(rTotals.totalPnl).toBeCloseTo(2); // USD +2R + HKD 0R
 });
 
 test("openPositions uses the LIVE stop — a cancelled stop (effective but not live) is not shown as protection", () => {
@@ -141,7 +141,7 @@ test("R total omissions distinguish no-stop (unprotected) from no-1R basis, and 
   expect(rTotals.unprotected).toBe(1); // only TSLA has no live stop
   expect(rTotals.openRiskOmitted).toBe(2); // TSLA (no stop) + MSFT (stop but no 1R) both drop from openRisk
   // unrealizedOmitted = MSFT (no 1R, though price known) + TSLA (no price) — so it is NOT "missing price":
-  expect(rTotals.unrealizedOmitted).toBe(2);
+  expect(rTotals.totalPnlOmitted).toBe(2);
 });
 
 test("openPositionsByCurrency totals open risk and computes risk % of latest equity, per currency", () => {
@@ -211,8 +211,8 @@ test("openPositions expresses each position's if-stopped outcome and P&L as % of
   insertFunds(d, { account: "a", currency: "USD", totalAssets: 10_000, cash: 0, marketVal: 0, time: 5000 });
   const p = openPositions(d, 5000)[0]!;
   expect(p.accountEquity).toBe(10_000);
-  expect(p.stopOutcomePct).toBeCloseTo(-0.005); // stopOutcome (95−100)×10 = −50 / 10000 = 0.5% at risk
-  expect(p.unrealizedPct).toBeCloseTo(0.01); // unrealized (110−100)×10 = 100 / 10000 = +1%
+  expect(p.cushionPct).toBeCloseTo(-0.005); // stopOutcome (95−100)×10 = −50 / 10000 = 0.5% at risk
+  expect(p.totalPnlPct).toBeCloseTo(0.01); // unrealized (110−100)×10 = 100 / 10000 = +1%
 });
 
 test("openPositions leaves % of account null when the account has no equity snapshot", () => {
@@ -226,7 +226,7 @@ test("openPositions leaves % of account null when the account has no equity snap
   ]);
   const p = openPositions(d, 5000)[0]!;
   expect(p.accountEquity).toBeNull();
-  expect(p.stopOutcomePct).toBeNull(); // no denominator → no %, never a partial/guessed figure
+  expect(p.cushionPct).toBeNull(); // no denominator → no %, never a partial/guessed figure
 });
 
 test("tradeSizing: position size as % of account equity, with basis fallback (none → latest → at_open)", () => {

@@ -10,10 +10,15 @@ interface Acc {
   direction: Direction;
   openTime: number;
   openId: string; // id of the opening fill (or "seed") — makes the trade id collision-safe
-  entryQty: number;
-  entryValue: number;
+  entryQty: number; // LIFETIME shares entered (never reduced) — feeds avgEntry + closed realizedPnl
+  entryValue: number; // LIFETIME entry notional (never reduced)
   exitQty: number;
   exitValue: number;
+  // Moving-average basis of the shares STILL HELD (fees folded in), reduced as shares are sold — the
+  // correct cost basis for realized-so-far, independent of the lifetime entry totals above.
+  remainingQty: number;
+  remainingBasis: number;
+  realizedSoFar: number; // profit BOOKED at each exit against the remaining basis as-of that exit (see applyExit)
   fees: number;
   maxQty: number;
   position: number; // signed
@@ -46,6 +51,9 @@ function newAcc(f: RawFill, direction: Direction, coverageOk: boolean): Acc {
     entryValue: 0,
     exitQty: 0,
     exitValue: 0,
+    remainingQty: 0,
+    remainingBasis: 0,
+    realizedSoFar: 0,
     fees: 0,
     maxQty: 0,
     position: 0,
@@ -69,6 +77,9 @@ function seedAcc(seed: SeedPosition): Acc {
     entryValue: qtyAbs * seed.avgCost, // real cost basis → sane avgEntry/PnL
     exitQty: 0,
     exitValue: 0,
+    remainingQty: qtyAbs,
+    remainingBasis: qtyAbs * seed.avgCost, // held shares carry the seed cost basis (no known fees)
+    realizedSoFar: 0,
     fees: 0,
     maxQty: qtyAbs,
     position: seed.qty,
@@ -80,9 +91,13 @@ function seedAcc(seed: SeedPosition): Acc {
 
 /** Apply a quantity portion of a fill as an entry (increasing exposure). */
 function applyEntry(acc: Acc, f: RawFill, qty: number): void {
+  const feeShare = f.fee * (qty / f.qty);
   acc.entryQty += qty;
   acc.entryValue += qty * f.price;
-  acc.fees += f.fee * (qty / f.qty);
+  acc.fees += feeShare;
+  // Grow the held-share basis. A LONG's fee raises its cost; a SHORT's fee lowers its net proceeds.
+  acc.remainingQty += qty;
+  acc.remainingBasis += acc.direction === "LONG" ? qty * f.price + feeShare : qty * f.price - feeShare;
   acc.position += acc.direction === "LONG" ? qty : -qty;
   acc.maxQty = Math.max(acc.maxQty, Math.abs(acc.position));
   acc.lastTime = f.time;
@@ -91,9 +106,21 @@ function applyEntry(acc: Acc, f: RawFill, qty: number): void {
 
 /** Apply a quantity portion of a fill as an exit (reducing exposure). */
 function applyExit(acc: Acc, f: RawFill, qty: number): void {
+  const feeShare = f.fee * (qty / f.qty);
+  // Book profit for THIS exit against the moving-average basis of the shares CURRENTLY held — not the
+  // lifetime entry average (a later add would otherwise re-price shares already sold). Then remove the
+  // sold shares' basis at that same average. Summed over exits = profit banked so far; == realizedPnl
+  // at a clean close, even for interleaved scale-out → add → exit sequences.
+  const avg = acc.remainingQty > 0 ? acc.remainingBasis / acc.remainingQty : 0;
+  acc.realizedSoFar +=
+    acc.direction === "LONG"
+      ? qty * (f.price - avg) - feeShare // sold above the held basis = profit
+      : qty * (avg - f.price) - feeShare; // covered below the held net proceeds = profit
+  acc.remainingBasis -= qty * avg;
+  acc.remainingQty -= qty;
   acc.exitQty += qty;
   acc.exitValue += qty * f.price;
-  acc.fees += f.fee * (qty / f.qty);
+  acc.fees += feeShare;
   acc.position += acc.direction === "LONG" ? -qty : qty;
   acc.lastTime = f.time;
   if (!acc.fillIds.includes(f.id)) acc.fillIds.push(f.id);
@@ -103,6 +130,9 @@ function finalize(acc: Acc): Trade {
   const closed = isZero(acc.position);
   const avgEntry = acc.entryQty > 0 ? acc.entryValue / acc.entryQty : 0;
   const avgExit = acc.exitQty > 0 ? acc.exitValue / acc.exitQty : null;
+  // Profit banked so far — accumulated per-exit at the cost basis then (see applyExit), so interleaved
+  // adds never re-price an earlier sale. 0 when nothing has been sold; == realizedPnl at a clean close.
+  const realizedSoFar = acc.realizedSoFar;
   let realizedPnl: number | null = null;
   if (closed) {
     realizedPnl =
@@ -123,6 +153,7 @@ function finalize(acc: Acc): Trade {
     avgExit,
     maxQty: acc.maxQty,
     realizedPnl,
+    realizedSoFar,
     fees: acc.fees,
     holdSeconds: closed ? Math.round((acc.lastTime - acc.openTime) / 1000) : null,
     coverageOk: acc.coverageOk,

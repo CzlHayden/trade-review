@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/store/migrations";
-import { rebuildDerived, backfillLiveStops } from "../../src/sync/sync";
+import { rebuildDerived } from "../../src/sync/sync";
 import { allTrades, insertPositionSnapshot, upsertRawFills, upsertRawOrders } from "../../src/store/repos";
 import { upsertJournal } from "../../src/store/journal";
 import { order } from "../helpers";
@@ -18,32 +18,26 @@ function seedRoundTrip(db: Database) {
   ]);
 }
 
-test("backfillLiveStops fills live_stop for open trades from stored orders (upgraded DB, pre first sync)", () => {
+test("rebuildDerived populates the derived stop/banked columns from local raw data (the upgrade backfill)", async () => {
+  // Models an upgraded DB re-derived offline (the startup backfill path): a scaled-out OPEN runner with
+  // a working stop. rebuildDerived must fill BOTH live_stop (from the order) and realized_so_far (from
+  // the partial exit) with no OpenD / candles — so the positions view is correct before the first sync.
   const db = new Database(":memory:");
   runMigrations(db);
-  // Simulate a v9-migrated DB whose trades predate the live_stop column: an OPEN trade with a working
-  // protective stop order, but live_stop still NULL (never re-derived). No OpenD / candles involved.
-  db.run(
-    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop)
-     VALUES ('t1','acc1','AAPL','USD','LONG','open', 60000, 10, 100, 0, 1, 9)`,
-  );
-  upsertRawOrders(db, [order("SELL", "STOP", 100, { triggerPrice: 9, createTime: 120000, status: "SUBMITTED" })]);
-  expect(allTrades(db)[0]!.liveStop).toBeNull(); // column exists but is empty until backfill/sync
+  upsertRawFills(db, [
+    { id: "b1", orderId: "ob", symbol: "US.AAPL", side: "BUY", qty: 10, price: 100, fee: 0, currency: "USD", time: 1000, account: "a" },
+    { id: "s1", orderId: "os", symbol: "US.AAPL", side: "SELL", qty: 4, price: 130, fee: 0, currency: "USD", time: 2000, account: "a" },
+  ]);
+  upsertRawOrders(db, [order("SELL", "STOP", 10, { symbol: "US.AAPL", account: "a", triggerPrice: 95, createTime: 1500, status: "WAITING_SUBMIT" })]);
+  // Snapshot confirming the 6 still held (else reconciliation synthesizes a close), + its marker.
+  insertPositionSnapshot(db, [{ account: "a", symbol: "US.AAPL", qty: 6, avgCost: 100, price: null, currency: "USD", time: 2500 }]);
+  setConfigValue(db, LAST_SNAPSHOT_TIME, "2500");
 
-  backfillLiveStops(db);
-  expect(allTrades(db)[0]!.liveStop).toBe(9); // inferred from the working stop order, no sync needed
-});
-
-test("backfillLiveStops leaves live_stop NULL when the only stop was cancelled (genuinely unprotected)", () => {
-  const db = new Database(":memory:");
-  runMigrations(db);
-  db.run(
-    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop)
-     VALUES ('t1','acc1','AAPL','USD','LONG','open', 60000, 10, 100, 0, 1, 9)`,
-  );
-  upsertRawOrders(db, [order("SELL", "STOP", 100, { triggerPrice: 9, createTime: 120000, status: "CANCELLED_ALL" })]);
-  backfillLiveStops(db);
-  expect(allTrades(db)[0]!.liveStop).toBeNull(); // a cancelled stop is not live → still unprotected
+  await rebuildDerived(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 3000 });
+  const t = allTrades(db)[0]!;
+  expect(t.status).toBe("open"); // holding 6
+  expect(t.liveStop).toBe(95); // inferred from the working stop order
+  expect(t.realizedSoFar).toBeCloseTo(120, 9); // banked 4×(130−100) from the partial exit
 });
 
 test("rebuildDerived rebuilds trades from raw with no OpenD involved", async () => {
