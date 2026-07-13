@@ -77,9 +77,9 @@ export interface CurrencyPositions {
 export interface RTotals {
   openRisk: number | null;
   unrealized: number | null;
-  positionsWithoutStop: number; // unprotected positions omitted from openRisk (real, unquantified risk)
-  positionsExcludedFromRisk: number; // positions with unknown R (no stop or no 1R basis) omitted from openRisk
-  positionsWithoutPrice: number; // positions omitted from unrealized (no price)
+  unprotected: number; // positions with no live stop (understate risk); subset of openRiskOmitted
+  openRiskOmitted: number; // positions excluded from openRisk (no live stop OR no 1R basis)
+  unrealizedOmitted: number; // positions excluded from unrealized (no price OR no 1R basis)
 }
 export interface PositionsResponse {
   byCurrency: CurrencyPositions[];

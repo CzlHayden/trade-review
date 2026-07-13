@@ -23,17 +23,26 @@ export function Positions() {
             <span className={`r-stat-val ${rt.openRisk ? "neg" : ""}`}>
               {rt.openRisk !== null ? rMultiple(-rt.openRisk) : "—"}
             </span>
-            {rt.positionsWithoutStop > 0 && (
-              <span className="r-stat-caveat warn" title="These positions have no working stop — their risk is real but unquantified, so it is NOT included in the figure above.">
-                + {rt.positionsWithoutStop} with no stop
-              </span>
-            )}
+            <OmitCaveat
+              omitted={rt.openRiskOmitted}
+              label={rt.unprotected === rt.openRiskOmitted ? "with no stop" : "not counted"}
+              title={
+                rt.unprotected === rt.openRiskOmitted
+                  ? "These positions have no working stop — their risk is real but unquantified, so it is NOT in the figure above."
+                  : "Excluded from this total — no working stop, or no 1R basis to express the risk in R."
+              }
+            />
           </div>
           <div className="r-stat">
             <span className="r-stat-label">Open P&amp;L</span>
             <span className={`r-stat-val ${signClass(rt.unrealized)}`}>
               {rt.unrealized !== null ? rMultiple(rt.unrealized) : "—"}
             </span>
+            <OmitCaveat
+              omitted={rt.unrealizedOmitted}
+              label="not counted"
+              title="Excluded from this P&L total — no current price, or no 1R basis to express it in R."
+            />
           </div>
         </div>
       )}
@@ -53,6 +62,11 @@ export function Positions() {
               <>
                 {" · open P&L "}
                 <RiskFrag pct={g.unrealizedPct} amount={g.totalUnrealized} currency={g.currency} equityNull={g.equity === null} signed />
+                {g.positionsWithoutPrice > 0 && (
+                  <span className="warn" title="Excluded from this open-P&L total — no current price.">
+                    {" "}(+{g.positionsWithoutPrice} no price)
+                  </span>
+                )}
               </>
             )}
             {" · deployed "}
@@ -118,6 +132,17 @@ export function Positions() {
         </div>
       ))}
     </div>
+  );
+}
+
+/** Caveat under an R total: "+N …" when the total silently omits positions it can't quantify, so a
+ * partial figure never reads as the whole book. Renders nothing when nothing was omitted. */
+function OmitCaveat({ omitted, label, title }: { omitted: number; label: string; title: string }) {
+  if (omitted <= 0) return null;
+  return (
+    <span className="r-stat-caveat warn" title={title}>
+      + {omitted} {label}
+    </span>
   );
 }
 

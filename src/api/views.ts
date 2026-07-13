@@ -195,12 +195,13 @@ export interface CurrencyPositions {
 export interface RTotals {
   openRisk: number | null; // Σ over positions of the loss-side R still at stake (0 on free trades)
   unrealized: number | null; // Σ of unrealized R across the book
-  // Counts of open positions the totals above could NOT include (no live stop / no price / no 1R
-  // basis) — a whole-book total that silently drops the riskiest (unprotected) rows would understate
-  // risk, so the UI caveats the figure with these instead of presenting a partial sum as complete.
-  positionsWithoutStop: number; // no live stop → not in openRisk (unprotected = real, unquantified risk)
-  positionsExcludedFromRisk: number; // stopOutcomeR unknown (no stop OR no 1R basis) → not in openRisk
-  positionsWithoutPrice: number; // no price → not in unrealized
+  // How many open positions each R total could NOT include, so the UI never presents a partial sum as
+  // the whole book. `openRiskOmitted` / `unrealizedOmitted` count EXACTLY what their total drops (R is
+  // unknown when the 1R basis is missing, on top of a missing stop / price). `unprotected` is the
+  // subset of openRiskOmitted with NO live stop — real but unquantified risk — which the UI flags loudest.
+  unprotected: number; // positions with no live stop (understate risk); subset of openRiskOmitted
+  openRiskOmitted: number; // positions excluded from openRisk (no live stop OR no 1R basis)
+  unrealizedOmitted: number; // positions excluded from unrealized (no price OR no 1R basis)
 }
 
 export interface PositionsResponse {
@@ -266,9 +267,9 @@ export function openPositionsByCurrency(db: Database, snapshotTime: number): Pos
   const rTotals: RTotals = {
     openRisk: sumOrNull(positions.map((p) => (p.stopOutcomeR === null ? null : Math.max(0, -p.stopOutcomeR)))),
     unrealized: sumOrNull(positions.map((p) => p.unrealizedR)),
-    positionsWithoutStop: positions.filter((p) => p.stopOutcome === null).length,
-    positionsExcludedFromRisk: positions.filter((p) => p.stopOutcomeR === null).length,
-    positionsWithoutPrice: positions.filter((p) => p.unrealizedR === null).length,
+    unprotected: positions.filter((p) => p.stopOutcome === null).length,
+    openRiskOmitted: positions.filter((p) => p.stopOutcomeR === null).length,
+    unrealizedOmitted: positions.filter((p) => p.unrealizedR === null).length,
   };
   return { byCurrency, rTotals };
 }

@@ -113,9 +113,35 @@ test("rTotals flags unprotected positions excluded from the whole-book R risk to
   ]);
   const { rTotals, byCurrency } = openPositionsByCurrency(d, 5000);
   expect(rTotals.openRisk).toBeCloseTo(1); // only the protected −1R position; NOT the whole book
-  expect(rTotals.positionsWithoutStop).toBe(1); // the caveat: one unprotected position is omitted
-  expect(rTotals.positionsExcludedFromRisk).toBe(1); // stopOutcomeR unknown for that row
+  expect(rTotals.unprotected).toBe(1); // the caveat: one unprotected position is omitted
+  expect(rTotals.openRiskOmitted).toBe(1); // stopOutcomeR unknown for that row → excluded from openRisk
   expect(byCurrency[0]!.positionsWithoutStop).toBe(1); // surfaced per-currency too
+});
+
+test("R total omissions distinguish no-stop (unprotected) from no-1R basis, and no-price from no-1R", () => {
+  const d = db();
+  // p1 AAPL: fully known (stop 95, risk 50, price 100). p2 MSFT: stop 190 but NO 1R basis (risk null),
+  // yet a KNOWN price 210 → excluded from BOTH R totals for lack of 1R, NOT for a missing price. p3
+  // TSLA: no stop (unprotected) and no price.
+  d.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, live_stop, risk)
+     VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95, 50),
+            ('t2','a','US.MSFT','USD','LONG','open', 1000, 200, 5, 0, 1, 190, NULL)`,
+  );
+  d.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, risk)
+     VALUES ('t3','a','US.TSLA','USD','LONG','open', 1000, 300, 2, 0, 1, 60)`,
+  );
+  insertPositionSnapshot(d, [
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, price: 100, currency: "USD", time: 5000 },
+    { account: "a", symbol: "US.MSFT", qty: 5, avgCost: 200, price: 210, currency: "USD", time: 5000 }, // KNOWN price
+    { account: "a", symbol: "US.TSLA", qty: 2, avgCost: 300, price: null, currency: "USD", time: 5000 },
+  ]);
+  const { rTotals } = openPositionsByCurrency(d, 5000);
+  expect(rTotals.unprotected).toBe(1); // only TSLA has no live stop
+  expect(rTotals.openRiskOmitted).toBe(2); // TSLA (no stop) + MSFT (stop but no 1R) both drop from openRisk
+  // unrealizedOmitted = MSFT (no 1R, though price known) + TSLA (no price) — so it is NOT "missing price":
+  expect(rTotals.unrealizedOmitted).toBe(2);
 });
 
 test("openPositionsByCurrency totals open risk and computes risk % of latest equity, per currency", () => {
