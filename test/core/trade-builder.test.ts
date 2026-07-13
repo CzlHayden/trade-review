@@ -53,6 +53,32 @@ test("partial scale-out then close", () => {
   expect(trades).toHaveLength(1);
   expect(trades[0]!.avgExit).toBe(13);
   expect(trades[0]!.realizedPnl).toBe(300); // 1300 - 1000
+  expect(trades[0]!.realizedSoFar).toBe(300); // at full close, realizedSoFar == realizedPnl
+});
+
+test("realizedSoFar banks the profit from a partial exit while the trade stays OPEN", () => {
+  // Buy 10 @ 10 (cost 100), sell 4 @ 13 → banked 4×(13−10) = 12; still holding 6 (trade open).
+  const trades = buildTrades([fill("BUY", 10, 10), fill("SELL", 4, 13)]);
+  expect(trades).toHaveLength(1);
+  const t = trades[0]!;
+  expect(t.status).toBe("open");
+  expect(t.realizedPnl).toBeNull(); // full realized P&L is still null until close (analytics unaffected)
+  expect(t.realizedSoFar).toBeCloseTo(12, 9); // but the profit already taken off the table IS captured
+});
+
+test("realizedSoFar nets fees prorated to the exited fraction", () => {
+  // Buy 10 @ 10 (fee 2), sell 4 @ 13 (fee 1). Fees so far = 3; exited fraction 4/10 → 1.2 of fees.
+  // Banked = 4×(13−10) − 1.2 = 12 − 1.2 = 10.8.
+  const trades = buildTrades([
+    fill("BUY", 10, 10, { fee: 2 }),
+    fill("SELL", 4, 13, { fee: 1 }),
+  ]);
+  expect(trades[0]!.realizedSoFar).toBeCloseTo(10.8, 9);
+});
+
+test("realizedSoFar is 0 for an open trade with no exits yet", () => {
+  const t = buildTrades([fill("BUY", 100, 10)])[0]!;
+  expect(t.realizedSoFar).toBe(0);
 });
 
 test("flip through zero splits into two trades", () => {

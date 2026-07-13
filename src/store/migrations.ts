@@ -182,6 +182,13 @@ export const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
   (db) => {
     db.run(`ALTER TABLE trades ADD COLUMN live_stop REAL;`);
   },
+  // v10 — persist realized-so-far: profit BANKED from partial exits while a trade is still open (the
+  // full realized_pnl stays NULL until close). Lets the open-positions cushion count money already taken
+  // off the table. Derived column: rebuilt every sync; NULL until re-derived → the reader treats it as 0
+  // (degrades to "nothing banked", the prior behavior — safe, unlike the live-stop case).
+  (db) => {
+    db.run(`ALTER TABLE trades ADD COLUMN realized_so_far REAL;`);
+  },
 ];
 
 export function currentVersion(db: Database): number {

@@ -123,11 +123,11 @@ export function replaceDerived(db: Database, trades: Trade[], flags: Map<string,
   const insTrade = db.prepare(
     `INSERT INTO trades
        (id, account, symbol, currency, direction, status, open_time, close_time, avg_entry,
-        avg_exit, max_qty, realized_pnl, fees, hold_seconds, coverage_ok,
+        avg_exit, max_qty, realized_pnl, realized_so_far, fees, hold_seconds, coverage_ok,
         effective_stop, live_stop, effective_tp, risk, r_multiple, mae, mfe)
      VALUES
        ($id, $account, $symbol, $currency, $direction, $status, $openTime, $closeTime, $avgEntry,
-        $avgExit, $maxQty, $realizedPnl, $fees, $holdSeconds, $coverageOk,
+        $avgExit, $maxQty, $realizedPnl, $realizedSoFar, $fees, $holdSeconds, $coverageOk,
         $effectiveStop, $liveStop, $effectiveTp, $risk, $rMultiple, $mae, $mfe)`,
   );
   const insLink = db.prepare(`INSERT INTO trade_fills (trade_id, fill_id) VALUES ($t, $f)`);
@@ -144,6 +144,7 @@ export function replaceDerived(db: Database, trades: Trade[], flags: Map<string,
         $id: t.id, $account: t.account, $symbol: t.symbol, $currency: t.currency,
         $direction: t.direction, $status: t.status, $openTime: t.openTime, $closeTime: t.closeTime,
         $avgEntry: t.avgEntry, $avgExit: t.avgExit, $maxQty: t.maxQty, $realizedPnl: t.realizedPnl,
+        $realizedSoFar: t.realizedSoFar,
         $fees: t.fees, $holdSeconds: t.holdSeconds, $coverageOk: t.coverageOk ? 1 : 0,
         $effectiveStop: t.effectiveStop, $liveStop: t.liveStop, $effectiveTp: t.effectiveTp, $risk: t.risk,
         $rMultiple: t.rMultiple, $mae: t.mae, $mfe: t.mfe,
@@ -170,7 +171,8 @@ export function allTrades(db: Database): Trade[] {
   return rows.map((r) => ({
     id: r.id, account: r.account, symbol: r.symbol, currency: r.currency, direction: r.direction,
     status: r.status, openTime: r.open_time, closeTime: r.close_time, avgEntry: r.avg_entry,
-    avgExit: r.avg_exit, maxQty: r.max_qty, realizedPnl: r.realized_pnl, fees: r.fees,
+    avgExit: r.avg_exit, maxQty: r.max_qty, realizedPnl: r.realized_pnl, realizedSoFar: r.realized_so_far ?? 0,
+    fees: r.fees,
     holdSeconds: r.hold_seconds, coverageOk: r.coverage_ok === 1,
     fillIds: byTrade.get(r.id) ?? [],
     effectiveStop: r.effective_stop, liveStop: r.live_stop, effectiveTp: r.effective_tp, risk: r.risk,

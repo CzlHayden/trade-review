@@ -103,6 +103,17 @@ function finalize(acc: Acc): Trade {
   const closed = isZero(acc.position);
   const avgEntry = acc.entryQty > 0 ? acc.entryValue / acc.entryQty : 0;
   const avgExit = acc.exitQty > 0 ? acc.exitValue / acc.exitQty : null;
+  // Profit BANKED so far from any exits (partial or full), on an average-cost basis with fees prorated
+  // by the exited fraction — so a still-OPEN runner reports the money already taken off the table, and
+  // at full close this equals realizedPnl exactly. 0 when nothing has been sold yet.
+  const exitedFraction = acc.entryQty > 0 ? acc.exitQty / acc.entryQty : 0;
+  const feesOnExits = acc.fees * exitedFraction;
+  const realizedSoFar =
+    acc.exitQty === 0
+      ? 0
+      : acc.direction === "LONG"
+        ? acc.exitValue - avgEntry * acc.exitQty - feesOnExits
+        : avgEntry * acc.exitQty - acc.exitValue - feesOnExits;
   let realizedPnl: number | null = null;
   if (closed) {
     realizedPnl =
@@ -123,6 +134,7 @@ function finalize(acc: Acc): Trade {
     avgExit,
     maxQty: acc.maxQty,
     realizedPnl,
+    realizedSoFar,
     fees: acc.fees,
     holdSeconds: closed ? Math.round((acc.lastTime - acc.openTime) / 1000) : null,
     coverageOk: acc.coverageOk,

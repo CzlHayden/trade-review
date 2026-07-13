@@ -49,17 +49,20 @@ export interface OpenPosition {
   avgCost: number;
   price: number | null; // current market price (snapshot); null when unknown
   liveStop: number | null; // the stop still working now (excludes cancelled/filled); null when unprotected
-  stopOutcome: number | null; // signed $ if stopped now (− loss / + locked profit)
-  openRisk: number | null; // loss still exposed (0 = free trade); null when no stop
-  lockedProfit: number | null; // profit locked in if stopped
-  unrealized: number | null; // paper P&L now
+  realizedSoFar: number; // profit already banked from partial exits (0 when none); counts toward the cushion
+  stopOutcome: number | null; // remaining shares only, if stopped (− loss / + locked); null when no stop
+  cushion: number | null; // TOTAL if stopped = banked + stopOutcome; null when no stop
+  openRisk: number | null; // loss still exposed net of banked (0 = free trade); null when no stop
+  lockedProfit: number | null; // profit locked in if stopped (incl. banked)
+  unrealized: number | null; // paper P&L on the remaining shares
+  totalPnl: number | null; // whole trade so far = banked + unrealized; null when price unknown
   initialRisk: number | null; // 1R in this currency
-  stopOutcomeR: number | null; // stopOutcome / initialRisk (signed; ≥ 0 ⇒ free trade)
-  unrealizedR: number | null; // unrealized / initialRisk
-  freeTrade: boolean; // stop locks in ≥ breakeven
+  cushionR: number | null; // cushion / initialRisk (signed; ≥ 0 ⇒ free trade)
+  totalPnlR: number | null; // totalPnl / initialRisk
+  freeTrade: boolean; // cushion locks in ≥ breakeven (banked profit included)
   accountEquity: number | null; // latest equity for this account+currency (the % denominator)
-  stopOutcomePct: number | null; // stopOutcome / equity — % of account at stake if stopped now (signed)
-  unrealizedPct: number | null; // unrealized / equity — paper P&L as % of account (signed)
+  cushionPct: number | null; // cushion / equity — % of account at stake if stopped now (signed)
+  totalPnlPct: number | null; // totalPnl / equity — whole-trade P&L as % of account (signed)
   tradeId: string | null;
 }
 export interface CurrencyPositions {
@@ -67,22 +70,22 @@ export interface CurrencyPositions {
   positions: OpenPosition[];
   totalOpenRisk: number | null;
   totalLockedProfit: number | null;
-  totalUnrealized: number | null;
+  totalPnl: number | null; // whole-trade P&L (banked + unrealized) summed over the currency
   positionsWithoutStop: number; // excluded from totalOpenRisk (no live stop)
-  positionsWithoutPrice: number; // excluded from totalUnrealized (no price)
+  positionsWithoutPrice: number; // excluded from totalPnl (no price)
   deployed: number;
   equity: number | null;
   riskPct: number | null;
-  unrealizedPct: number | null;
+  totalPnlPct: number | null;
   deployedPct: number | null;
 }
 /** Portfolio totals in R — dimensionless, so these sum across currencies (unlike dollars). */
 export interface RTotals {
   openRisk: number | null;
-  unrealized: number | null;
+  totalPnl: number | null; // whole-trade P&L in R (banked + unrealized), summed across the book
   unprotected: number; // positions with no live stop (understate risk); subset of openRiskOmitted
   openRiskOmitted: number; // positions excluded from openRisk (no live stop OR no 1R basis)
-  unrealizedOmitted: number; // positions excluded from unrealized (no price OR no 1R basis)
+  totalPnlOmitted: number; // positions excluded from totalPnl (no price OR no 1R basis)
 }
 export interface PositionsResponse {
   byCurrency: CurrencyPositions[];

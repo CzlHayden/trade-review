@@ -16,7 +16,7 @@ export function Positions() {
 
   return (
     <div>
-      {rt && (rt.openRisk !== null || rt.unrealized !== null) && (
+      {rt && (rt.openRisk !== null || rt.totalPnl !== null) && (
         <div className="r-strip">
           <div className="r-stat">
             <span className="r-stat-label">Portfolio open risk</span>
@@ -34,12 +34,12 @@ export function Positions() {
             />
           </div>
           <div className="r-stat">
-            <span className="r-stat-label">Open P&amp;L</span>
-            <span className={`r-stat-val ${signClass(rt.unrealized)}`}>
-              {rt.unrealized !== null ? rMultiple(rt.unrealized) : "—"}
+            <span className="r-stat-label" title="Realized profit already banked from partial exits + unrealized on the shares still held">Portfolio P&amp;L</span>
+            <span className={`r-stat-val ${signClass(rt.totalPnl)}`}>
+              {rt.totalPnl !== null ? rMultiple(rt.totalPnl) : "—"}
             </span>
             <OmitCaveat
-              omitted={rt.unrealizedOmitted}
+              omitted={rt.totalPnlOmitted}
               label="not counted"
               title="Excluded from this P&L total — no current price, or no 1R basis to express it in R."
             />
@@ -58,12 +58,12 @@ export function Positions() {
                 {" "}(+{g.positionsWithoutStop} no stop)
               </span>
             )}
-            {g.totalUnrealized !== null && (
+            {g.totalPnl !== null && (
               <>
-                {" · open P&L "}
-                <RiskFrag pct={g.unrealizedPct} amount={g.totalUnrealized} currency={g.currency} equityNull={g.equity === null} signed />
+                {" · P&L "}
+                <RiskFrag pct={g.totalPnlPct} amount={g.totalPnl} currency={g.currency} equityNull={g.equity === null} signed />
                 {g.positionsWithoutPrice > 0 && (
-                  <span className="warn" title="Excluded from this open-P&L total — no current price.">
+                  <span className="warn" title="Excluded from this P&L total — no current price.">
                     {" "}(+{g.positionsWithoutPrice} no price)
                   </span>
                 )}
@@ -86,7 +86,7 @@ export function Positions() {
                   <th className="right">Avg → Price</th>
                   <th className="right">Stop</th>
                   <th className="right">If stopped</th>
-                  <th className="right">Open P&amp;L</th>
+                  <th className="right">P&amp;L</th>
                 </tr>
               </thead>
               <tbody>
@@ -109,20 +109,34 @@ export function Positions() {
                     <td className="right num">
                       {p.liveStop !== null ? price(p.liveStop, p.currency) : <span className="warn">no stop</span>}
                     </td>
-                    {/* If stopped now: signed R (− at risk / + locked), the $ beneath, the % of account
-                        below that, and a FREE pill. */}
+                    {/* If stopped now: the TOTAL cushion (banked profit + remaining shares) as signed R,
+                        the $ beneath, the % of account below that, a FREE pill, and — when some profit is
+                        already banked — a note so the cushion isn't mistaken for the remainder alone. */}
                     <td className="right num">
-                      {p.stopOutcome === null ? (
+                      {p.cushion === null ? (
                         <span className="faint">—</span>
                       ) : (
-                        <RCell r={p.stopOutcomeR} amount={p.stopOutcome} pct={p.stopOutcomePct} currency={p.currency} badge={p.freeTrade ? "FREE" : undefined} />
+                        <RCell
+                          r={p.cushionR}
+                          amount={p.cushion}
+                          pct={p.cushionPct}
+                          currency={p.currency}
+                          badge={p.freeTrade ? "FREE" : undefined}
+                          note={p.realizedSoFar !== 0 ? `incl. ${money(p.realizedSoFar, p.currency)} banked` : undefined}
+                        />
                       )}
                     </td>
                     <td className="right num">
-                      {p.unrealized === null ? (
+                      {p.totalPnl === null ? (
                         <span className="faint">—</span>
                       ) : (
-                        <RCell r={p.unrealizedR} amount={p.unrealized} pct={p.unrealizedPct} currency={p.currency} />
+                        <RCell
+                          r={p.totalPnlR}
+                          amount={p.totalPnl}
+                          pct={p.totalPnlPct}
+                          currency={p.currency}
+                          note={p.realizedSoFar !== 0 ? `${money(p.realizedSoFar, p.currency)} banked + open` : undefined}
+                        />
                       )}
                     </td>
                   </tr>
@@ -148,8 +162,9 @@ function OmitCaveat({ omitted, label, title }: { omitted: number; label: string;
 }
 
 /** A signed R value (primary) with the dollar amount beneath and, when known, the % of account below
- * that — leading with R, then $, then % (sizing preference). Colored by sign. Optional pill (FREE). */
-function RCell({ r, amount, pct: p, currency, badge }: { r: number | null; amount: number; pct?: number | null; currency: string; badge?: string }) {
+ * that — leading with R, then $, then % (sizing preference). Colored by sign. Optional pill (FREE) and
+ * a small `note` (e.g. how much profit is already banked). */
+function RCell({ r, amount, pct: p, currency, badge, note }: { r: number | null; amount: number; pct?: number | null; currency: string; badge?: string; note?: string }) {
   const cls = signClass(r ?? amount);
   return (
     <div style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: 1 }}>
@@ -157,12 +172,13 @@ function RCell({ r, amount, pct: p, currency, badge }: { r: number | null; amoun
         {badge && <span className="free-pill">{badge}</span>}
         {r !== null ? rMultiple(r) : money(amount, currency)}
       </span>
-      {r !== null && <span className="faint" style={{ fontSize: 11 }}>{money(amount, currency)}</span>}
+      {r !== null && <span className={cls} style={{ fontSize: 12 }}>{money(amount, currency)}</span>}
       {p !== null && p !== undefined && (
-        <span className="faint" style={{ fontSize: 11 }} title="Share of account equity (this currency)">
+        <span className={cls} style={{ fontSize: 12 }} title="Share of account equity (this currency)">
           {pct(p)} of acct
         </span>
       )}
+      {note && <span className="faint" style={{ fontSize: 11 }}>{note}</span>}
     </div>
   );
 }

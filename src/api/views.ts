@@ -26,21 +26,25 @@ export interface OpenPosition {
   avgCost: number;
   price: number | null; // current market price from the latest snapshot (FUTU's mark); null when unknown
   liveStop: number | null; // the stop STILL WORKING now (excludes cancelled/filled); null when unprotected
-  // "If stopped at the current stop" — a signed outcome (own currency), and its two sides:
-  stopOutcome: number | null; // (stop − avgCost) × qty; − loss / + locked profit; null when no stop
-  openRisk: number | null; // loss still exposed = max(0, −stopOutcome); 0 on a free trade; null when no stop
-  lockedProfit: number | null; // guaranteed profit if stopped = max(0, stopOutcome)
-  unrealized: number | null; // paper P&L now = (price − avgCost) × qty; null when price unknown
+  realizedSoFar: number; // profit already BANKED from partial exits (0 when none); counts toward the cushion
+  // "If stopped at the current stop" — a signed outcome (own currency). The cushion is the TOTAL floor
+  // (banked profit + the remaining shares' outcome); openRisk / lockedProfit are its two sides.
+  stopOutcome: number | null; // remaining shares only: (stop − avgCost) × qty; null when no stop
+  cushion: number | null; // TOTAL if stopped = realizedSoFar + stopOutcome (banked + remaining); null when no stop
+  openRisk: number | null; // loss still exposed net of banked = max(0, −cushion); 0 on a free trade; null when no stop
+  lockedProfit: number | null; // guaranteed profit if stopped = max(0, cushion)
+  unrealized: number | null; // paper P&L on the remaining shares = (price − avgCost) × qty; null when price unknown
+  totalPnl: number | null; // whole trade so far = realizedSoFar + unrealized; null when price unknown
   initialRisk: number | null; // the trade's 1R in this currency (its initial dollar risk); null when unknown
-  stopOutcomeR: number | null; // stopOutcome ÷ initialRisk (signed; ≥ 0 ⇒ free trade)
-  unrealizedR: number | null; // unrealized ÷ initialRisk — "how many R up am I now"
-  freeTrade: boolean; // stop locks in ≥ breakeven — no downside left
+  cushionR: number | null; // cushion ÷ initialRisk (signed; ≥ 0 ⇒ free trade)
+  totalPnlR: number | null; // totalPnl ÷ initialRisk — "how many R is the whole trade up now"
+  freeTrade: boolean; // the cushion locks in ≥ breakeven — no downside left (banked profit included)
   // As a fraction of THIS position's account equity (same currency — never mixed), so the row reads
   // "risking 0.4% of the account" (sizing preference: lead with % of account, not raw $). Signed to
-  // match its dollar figure: stopOutcomePct is − when at risk / + when locked; null when equity unknown.
+  // match its dollar figure: cushionPct is − when at risk / + when locked; null when equity unknown.
   accountEquity: number | null; // latest equity for this account+currency (the % denominator)
-  stopOutcomePct: number | null; // stopOutcome ÷ equity — % of account at stake if stopped now
-  unrealizedPct: number | null; // unrealized ÷ equity — paper P&L as % of account
+  cushionPct: number | null; // cushion ÷ equity — % of account at stake if stopped now
+  totalPnlPct: number | null; // totalPnl ÷ equity — whole-trade P&L as % of account
   tradeId: string | null; // the open trade this holding belongs to → deep-link to its detail page
 }
 
@@ -70,7 +74,8 @@ export function openPositions(db: Database, snapshotTime: number): OpenPosition[
     // been cancelled — that would show a cancelled profit-side stop as a "free trade" with zero risk).
     const liveStop = trade?.liveStop ?? null;
     const initialRisk = trade?.risk ?? null;
-    const m = positionMetrics({ avgCost: p.avgCost, qty: p.qty, price: p.price, stop: liveStop, initialRisk });
+    const realizedSoFar = trade?.realizedSoFar ?? 0; // banked profit from partial exits (0 if none)
+    const m = positionMetrics({ avgCost: p.avgCost, qty: p.qty, price: p.price, stop: liveStop, initialRisk, realizedSoFar });
     // % of account: this position's own account equity, in its own currency (never mixed).
     const accountEquity = equityFor(p.account, p.currency);
     const pctOf = (n: number | null): number | null =>
@@ -83,17 +88,20 @@ export function openPositions(db: Database, snapshotTime: number): OpenPosition[
       avgCost: p.avgCost,
       price: p.price,
       liveStop,
+      realizedSoFar: m.realizedSoFar,
       stopOutcome: m.stopOutcome,
+      cushion: m.cushion,
       openRisk: m.openRisk,
       lockedProfit: m.lockedProfit,
       unrealized: m.unrealized,
+      totalPnl: m.totalPnl,
       initialRisk,
-      stopOutcomeR: m.stopOutcomeR,
-      unrealizedR: m.unrealizedR,
+      cushionR: m.cushionR,
+      totalPnlR: m.totalPnlR,
       freeTrade: m.freeTrade,
       accountEquity,
-      stopOutcomePct: pctOf(m.stopOutcome),
-      unrealizedPct: pctOf(m.unrealized),
+      cushionPct: pctOf(m.cushion),
+      totalPnlPct: pctOf(m.totalPnl),
       tradeId: trade?.id ?? null,
     };
   });
@@ -199,33 +207,33 @@ export function tradeDetail(db: Database, id: string): TradeDetail | null {
 export interface CurrencyPositions {
   currency: string;
   positions: OpenPosition[];
-  totalOpenRisk: number | null; // sum of openRisk over rows that have one (null when none do)
-  totalLockedProfit: number | null; // sum of lockedProfit over rows that have a stop
-  totalUnrealized: number | null; // sum of unrealized P&L over rows with a known price
+  totalOpenRisk: number | null; // sum of openRisk (net of banked profit) over rows that have a stop
+  totalLockedProfit: number | null; // sum of lockedProfit (incl. banked) over rows that have a stop
+  totalPnl: number | null; // sum of whole-trade P&L (banked + unrealized) over rows with a known price
   // Honesty flags for the sums above — a total silently omits rows it can't quantify, so surface how
   // many were left out. An UNPROTECTED position (no live stop) is the highest-risk case, yet it
   // contributes nothing to totalOpenRisk; without this the total reads as the whole book when it isn't.
   positionsWithoutStop: number; // rows with no live stop → excluded from totalOpenRisk
-  positionsWithoutPrice: number; // rows with no price → excluded from totalUnrealized
+  positionsWithoutPrice: number; // rows with no price → excluded from totalPnl
   deployed: number; // capital deployed = Σ |qty| × avgCost across this currency's holdings
   equity: number | null; // latest equity snapshot in this currency
   riskPct: number | null; // totalOpenRisk / equity
-  unrealizedPct: number | null; // totalUnrealized / equity
+  totalPnlPct: number | null; // totalPnl / equity
   deployedPct: number | null; // deployed / equity — how much of the account is committed
 }
 
 /** Portfolio totals in R. R is dimensionless (P&L ÷ the trade's own initial risk), so unlike dollars
  * these DO sum across currencies — the honest whole-book "how much am I risking / up, in R". */
 export interface RTotals {
-  openRisk: number | null; // Σ over positions of the loss-side R still at stake (0 on free trades)
-  unrealized: number | null; // Σ of unrealized R across the book
+  openRisk: number | null; // Σ over positions of the loss-side R still at stake, net of banked profit (0 on free trades)
+  totalPnl: number | null; // Σ of whole-trade R (banked + unrealized) across the book
   // How many open positions each R total could NOT include, so the UI never presents a partial sum as
-  // the whole book. `openRiskOmitted` / `unrealizedOmitted` count EXACTLY what their total drops (R is
+  // the whole book. `openRiskOmitted` / `totalPnlOmitted` count EXACTLY what their total drops (R is
   // unknown when the 1R basis is missing, on top of a missing stop / price). `unprotected` is the
   // subset of openRiskOmitted with NO live stop — real but unquantified risk — which the UI flags loudest.
   unprotected: number; // positions with no live stop (understate risk); subset of openRiskOmitted
   openRiskOmitted: number; // positions excluded from openRisk (no live stop OR no 1R basis)
-  unrealizedOmitted: number; // positions excluded from unrealized (no price OR no 1R basis)
+  totalPnlOmitted: number; // positions excluded from totalPnl (no price OR no 1R basis)
 }
 
 export interface PositionsResponse {
@@ -253,9 +261,9 @@ export function openPositionsByCurrency(db: Database, snapshotTime: number): Pos
     .map(([currency, ps]) => {
       const totalOpenRisk = sumOrNull(ps.map((p) => p.openRisk));
       const totalLockedProfit = sumOrNull(ps.map((p) => p.lockedProfit));
-      const totalUnrealized = sumOrNull(ps.map((p) => p.unrealized));
-      const positionsWithoutStop = ps.filter((p) => p.stopOutcome === null).length;
-      const positionsWithoutPrice = ps.filter((p) => p.unrealized === null).length;
+      const totalPnl = sumOrNull(ps.map((p) => p.totalPnl));
+      const positionsWithoutStop = ps.filter((p) => p.cushion === null).length;
+      const positionsWithoutPrice = ps.filter((p) => p.totalPnl === null).length;
       // Deployed capital: sum notional (|qty| × avgCost) — same currency only, an exposure sum (not P&L).
       const deployed = ps.reduce((a, p) => a + Math.abs(p.qty) * p.avgCost, 0);
       // Sum equity for this currency across the DISTINCT accounts holding it (each account's own
@@ -277,23 +285,23 @@ export function openPositionsByCurrency(db: Database, snapshotTime: number): Pos
         positions: ps,
         totalOpenRisk,
         totalLockedProfit,
-        totalUnrealized,
+        totalPnl,
         positionsWithoutStop,
         positionsWithoutPrice,
         deployed,
         equity,
         riskPct: pct(totalOpenRisk),
-        unrealizedPct: pct(totalUnrealized),
+        totalPnlPct: pct(totalPnl),
         deployedPct: pct(deployed),
       };
     });
   // R totals across the whole book (R is unitless, so cross-currency summing is valid).
   const rTotals: RTotals = {
-    openRisk: sumOrNull(positions.map((p) => (p.stopOutcomeR === null ? null : Math.max(0, -p.stopOutcomeR)))),
-    unrealized: sumOrNull(positions.map((p) => p.unrealizedR)),
-    unprotected: positions.filter((p) => p.stopOutcome === null).length,
-    openRiskOmitted: positions.filter((p) => p.stopOutcomeR === null).length,
-    unrealizedOmitted: positions.filter((p) => p.unrealizedR === null).length,
+    openRisk: sumOrNull(positions.map((p) => (p.cushionR === null ? null : Math.max(0, -p.cushionR)))),
+    totalPnl: sumOrNull(positions.map((p) => p.totalPnlR)),
+    unprotected: positions.filter((p) => p.cushion === null).length,
+    openRiskOmitted: positions.filter((p) => p.cushionR === null).length,
+    totalPnlOmitted: positions.filter((p) => p.totalPnlR === null).length,
   };
   return { byCurrency, rTotals };
 }

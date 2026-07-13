@@ -69,7 +69,8 @@ export interface Trade {
   avgEntry: number;
   avgExit: number | null;
   maxQty: number;
-  realizedPnl: number | null;
+  realizedPnl: number | null; // net realized P&L; null until the trade is fully CLOSED (analytics sums only these)
+  realizedSoFar: number; // profit banked from exits SO FAR (partial or full); 0 when nothing sold; == realizedPnl at close
   fees: number;
   holdSeconds: number | null;
   coverageOk: boolean; // false when the trade began before our data coverage (seeded)
