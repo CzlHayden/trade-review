@@ -119,7 +119,7 @@ function tradeFixture(over: Partial<Trade> = {}): Trade {
     account: "acc1", symbol: "AAPL", currency: "USD", direction: "LONG", status: "closed",
     openTime: 1000, closeTime: 2000, avgEntry: 10, avgExit: 11, maxQty: 100,
     realizedPnl: 100, fees: 1, holdSeconds: 1, coverageOk: true, fillIds: ["f1", "f2"],
-    effectiveStop: 9, effectiveTp: null, risk: 100, rMultiple: 1, mae: 0.5, mfe: 2,
+    effectiveStop: 9, liveStop: 9, effectiveTp: null, risk: 100, rMultiple: 1, mae: 0.5, mfe: 2,
     ...over,
   };
 }

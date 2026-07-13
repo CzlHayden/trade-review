@@ -25,7 +25,7 @@ export interface OpenPosition {
   qty: number; // signed
   avgCost: number;
   price: number | null; // current market price from the latest snapshot (FUTU's mark); null when unknown
-  effectiveStop: number | null;
+  liveStop: number | null; // the stop STILL WORKING now (excludes cancelled/filled); null when unprotected
   // "If stopped at the current stop" — a signed outcome (own currency), and its two sides:
   stopOutcome: number | null; // (stop − avgCost) × qty; − loss / + locked profit; null when no stop
   openRisk: number | null; // loss still exposed = max(0, −stopOutcome); 0 on a free trade; null when no stop
@@ -49,9 +49,11 @@ export function openPositions(db: Database, snapshotTime: number): OpenPosition[
   }
   return snap.map((p) => {
     const trade = tradeBy.get(`${p.account}|${p.symbol}`);
-    const effectiveStop = trade?.effectiveStop ?? null;
+    // Live risk readout: the stop STILL WORKING now (not the effective/ever-seen stop, which may have
+    // been cancelled — that would show a cancelled profit-side stop as a "free trade" with zero risk).
+    const liveStop = trade?.liveStop ?? null;
     const initialRisk = trade?.risk ?? null;
-    const m = positionMetrics({ avgCost: p.avgCost, qty: p.qty, price: p.price, stop: effectiveStop, initialRisk });
+    const m = positionMetrics({ avgCost: p.avgCost, qty: p.qty, price: p.price, stop: liveStop, initialRisk });
     return {
       account: p.account,
       symbol: p.symbol,
@@ -59,7 +61,7 @@ export function openPositions(db: Database, snapshotTime: number): OpenPosition[
       qty: p.qty,
       avgCost: p.avgCost,
       price: p.price,
-      effectiveStop,
+      liveStop,
       stopOutcome: m.stopOutcome,
       openRisk: m.openRisk,
       lockedProfit: m.lockedProfit,
@@ -176,6 +178,11 @@ export interface CurrencyPositions {
   totalOpenRisk: number | null; // sum of openRisk over rows that have one (null when none do)
   totalLockedProfit: number | null; // sum of lockedProfit over rows that have a stop
   totalUnrealized: number | null; // sum of unrealized P&L over rows with a known price
+  // Honesty flags for the sums above — a total silently omits rows it can't quantify, so surface how
+  // many were left out. An UNPROTECTED position (no live stop) is the highest-risk case, yet it
+  // contributes nothing to totalOpenRisk; without this the total reads as the whole book when it isn't.
+  positionsWithoutStop: number; // rows with no live stop → excluded from totalOpenRisk
+  positionsWithoutPrice: number; // rows with no price → excluded from totalUnrealized
   deployed: number; // capital deployed = Σ |qty| × avgCost across this currency's holdings
   equity: number | null; // latest equity snapshot in this currency
   riskPct: number | null; // totalOpenRisk / equity
@@ -188,6 +195,12 @@ export interface CurrencyPositions {
 export interface RTotals {
   openRisk: number | null; // Σ over positions of the loss-side R still at stake (0 on free trades)
   unrealized: number | null; // Σ of unrealized R across the book
+  // Counts of open positions the totals above could NOT include (no live stop / no price / no 1R
+  // basis) — a whole-book total that silently drops the riskiest (unprotected) rows would understate
+  // risk, so the UI caveats the figure with these instead of presenting a partial sum as complete.
+  positionsWithoutStop: number; // no live stop → not in openRisk (unprotected = real, unquantified risk)
+  positionsExcludedFromRisk: number; // stopOutcomeR unknown (no stop OR no 1R basis) → not in openRisk
+  positionsWithoutPrice: number; // no price → not in unrealized
 }
 
 export interface PositionsResponse {
@@ -216,6 +229,8 @@ export function openPositionsByCurrency(db: Database, snapshotTime: number): Pos
       const totalOpenRisk = sumOrNull(ps.map((p) => p.openRisk));
       const totalLockedProfit = sumOrNull(ps.map((p) => p.lockedProfit));
       const totalUnrealized = sumOrNull(ps.map((p) => p.unrealized));
+      const positionsWithoutStop = ps.filter((p) => p.stopOutcome === null).length;
+      const positionsWithoutPrice = ps.filter((p) => p.unrealized === null).length;
       // Deployed capital: sum notional (|qty| × avgCost) — same currency only, an exposure sum (not P&L).
       const deployed = ps.reduce((a, p) => a + Math.abs(p.qty) * p.avgCost, 0);
       // Sum equity for this currency across the DISTINCT accounts holding it (each account's own
@@ -238,6 +253,8 @@ export function openPositionsByCurrency(db: Database, snapshotTime: number): Pos
         totalOpenRisk,
         totalLockedProfit,
         totalUnrealized,
+        positionsWithoutStop,
+        positionsWithoutPrice,
         deployed,
         equity,
         riskPct: pct(totalOpenRisk),
@@ -249,6 +266,9 @@ export function openPositionsByCurrency(db: Database, snapshotTime: number): Pos
   const rTotals: RTotals = {
     openRisk: sumOrNull(positions.map((p) => (p.stopOutcomeR === null ? null : Math.max(0, -p.stopOutcomeR)))),
     unrealized: sumOrNull(positions.map((p) => p.unrealizedR)),
+    positionsWithoutStop: positions.filter((p) => p.stopOutcome === null).length,
+    positionsExcludedFromRisk: positions.filter((p) => p.stopOutcomeR === null).length,
+    positionsWithoutPrice: positions.filter((p) => p.unrealizedR === null).length,
   };
   return { byCurrency, rTotals };
 }

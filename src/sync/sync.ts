@@ -267,6 +267,9 @@ export async function rebuildDerived(
     const ms = manual.get(t.id);
     const initialStop = ms ?? stop.initialStop; // initial = planned risk (spec §6)
     const effectiveStop = ms ?? stop.effectiveStop;
+    // Live stop = the still-working protective stop (excludes cancelled/filled); a manual stop is the
+    // user's explicit current stop, so it overrides here too. Powers the open-positions risk readout.
+    const liveStop = ms ?? stop.liveStop;
     // A manual stop is the user asserting the risk basis explicitly — honor it even on a seeded /
     // split-affected trade (their escape hatch when the tool can't reconstruct the original stop).
     const { risk, rMultiple } = computeRisk(t, initialStop, { manual: ms != null });
@@ -297,6 +300,7 @@ export async function rebuildDerived(
     const enriched: Trade = {
       ...t,
       effectiveStop,
+      liveStop,
       effectiveTp: stop.effectiveTp,
       risk,
       rMultiple,

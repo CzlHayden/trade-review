@@ -44,6 +44,7 @@ test("a manual stop overrides inference → risk/rMultiple recompute via rebuild
   expect(after.risk).toBeCloseTo(50); // |100 - 95| * 10
   expect(after.rMultiple).toBeCloseTo(2); // realized 100 / risk 50
   expect(after.effectiveStop).toBe(95);
+  expect(after.liveStop).toBe(95); // a manual stop is authoritative for the live readout too
 });
 
 test("a standalone rebuild reconciles seeds against the snapshot MARKER, not wall-clock now", async () => {

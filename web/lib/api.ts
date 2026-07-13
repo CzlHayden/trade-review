@@ -48,7 +48,7 @@ export interface OpenPosition {
   qty: number;
   avgCost: number;
   price: number | null; // current market price (snapshot); null when unknown
-  effectiveStop: number | null;
+  liveStop: number | null; // the stop still working now (excludes cancelled/filled); null when unprotected
   stopOutcome: number | null; // signed $ if stopped now (− loss / + locked profit)
   openRisk: number | null; // loss still exposed (0 = free trade); null when no stop
   lockedProfit: number | null; // profit locked in if stopped
@@ -65,6 +65,8 @@ export interface CurrencyPositions {
   totalOpenRisk: number | null;
   totalLockedProfit: number | null;
   totalUnrealized: number | null;
+  positionsWithoutStop: number; // excluded from totalOpenRisk (no live stop)
+  positionsWithoutPrice: number; // excluded from totalUnrealized (no price)
   deployed: number;
   equity: number | null;
   riskPct: number | null;
@@ -75,6 +77,9 @@ export interface CurrencyPositions {
 export interface RTotals {
   openRisk: number | null;
   unrealized: number | null;
+  positionsWithoutStop: number; // unprotected positions omitted from openRisk (real, unquantified risk)
+  positionsExcludedFromRisk: number; // positions with unknown R (no stop or no 1R basis) omitted from openRisk
+  positionsWithoutPrice: number; // positions omitted from unrealized (no price)
 }
 export interface PositionsResponse {
   byCurrency: CurrencyPositions[];

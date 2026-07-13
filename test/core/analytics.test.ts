@@ -22,6 +22,7 @@ function tr(over: Partial<Trade>): Trade {
     coverageOk: over.coverageOk ?? true,
     fillIds: [],
     effectiveStop: null,
+    liveStop: null,
     effectiveTp: null,
     risk: over.risk ?? null,
     rMultiple: over.rMultiple ?? null,

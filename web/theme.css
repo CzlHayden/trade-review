@@ -685,3 +685,12 @@ table.data tbody tr.clickable {
   background: color-mix(in srgb, var(--pos) 15%, transparent);
   border: 1px solid color-mix(in srgb, var(--pos) 35%, transparent);
 }
+.warn {
+  color: var(--warn);
+}
+.r-stat-caveat {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: help;
+}

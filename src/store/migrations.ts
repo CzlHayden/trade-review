@@ -175,6 +175,13 @@ export const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
   (db) => {
     db.run(`ALTER TABLE raw_positions ADD COLUMN price REAL;`);
   },
+  // v9 — persist the LIVE stop (latest still-working protective stop) alongside the effective stop.
+  // The effective stop is the latest ever seen and may since have been cancelled; the open-positions
+  // risk readout must use the live one so a cancelled stop is never shown as active protection.
+  // Derived column: rebuilt every sync from raw orders, so NULL until the next sync re-derives trades.
+  (db) => {
+    db.run(`ALTER TABLE trades ADD COLUMN live_stop REAL;`);
+  },
 ];
 
 export function currentVersion(db: Database): number {

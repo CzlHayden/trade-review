@@ -252,6 +252,7 @@ function base(): Trade {
     coverageOk: true,
     fillIds: [],
     effectiveStop: null,
+    liveStop: null,
     effectiveTp: null,
     risk: null,
     rMultiple: null,

@@ -15,7 +15,7 @@ function db() {
 test("openPositions joins snapshot + open trade and computes open risk per currency", () => {
   const d = db();
   d.run(
-    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop)
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, live_stop)
      VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95)`,
   );
   insertPositionSnapshot(d, [
@@ -43,7 +43,7 @@ test("openPositions: a stop above entry is a free trade — zero open risk, lock
   const d = db();
   // Entry 100, stop 103 (above entry → locked profit), initial risk (1R) = 50, current price 110.
   d.run(
-    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop, risk)
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, live_stop, risk)
      VALUES ('t1','a','US.SNOW','USD','LONG','open', 1000, 100, 10, 0, 1, 103, 50)`,
   );
   insertPositionSnapshot(d, [
@@ -61,11 +61,11 @@ test("openPositions: a stop above entry is a free trade — zero open risk, lock
 test("openPositionsByCurrency: rTotals sum open-risk and unrealized in R across currencies", () => {
   const d = db();
   d.run(
-    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop, risk)
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, live_stop, risk)
      VALUES ('t1','a','US.SNOW','USD','LONG','open', 1000, 100, 10, 0, 1, 103, 50)`, // free trade, +2R unrealized
   );
   d.run(
-    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop, risk)
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, live_stop, risk)
      VALUES ('t2','a','HK.700','HKD','LONG','open', 1000, 100, 10, 0, 1, 95, 50)`, // -1R at risk, flat
   );
   insertPositionSnapshot(d, [
@@ -77,10 +77,51 @@ test("openPositionsByCurrency: rTotals sum open-risk and unrealized in R across 
   expect(rTotals.unrealized).toBeCloseTo(2); // USD +2R + HKD 0R
 });
 
+test("openPositions uses the LIVE stop — a cancelled stop (effective but not live) is not shown as protection", () => {
+  const d = db();
+  // effective_stop 103 was the last stop ever seen, but it was cancelled → live_stop is NULL. The live
+  // readout must treat this position as UNPROTECTED, never as a free trade with zero downside risk.
+  d.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop, live_stop, risk)
+     VALUES ('t1','a','US.SNOW','USD','LONG','open', 1000, 100, 10, 0, 1, 103, NULL, 50)`,
+  );
+  insertPositionSnapshot(d, [
+    { account: "a", symbol: "US.SNOW", qty: 10, avgCost: 100, price: 110, currency: "USD", time: 5000 },
+  ]);
+  const p = openPositions(d, 5000)[0]!;
+  expect(p.liveStop).toBeNull();
+  expect(p.stopOutcome).toBeNull(); // no working stop ⇒ outcome-if-stopped is unknown, not zero
+  expect(p.openRisk).toBeNull();
+  expect(p.freeTrade).toBe(false); // the bug: a cancelled profit-side stop must NOT read as FREE
+});
+
+test("rTotals flags unprotected positions excluded from the whole-book R risk total (no silent partial)", () => {
+  const d = db();
+  // One protected at −1R, one UNPROTECTED (no live stop) — the scariest case, yet it can't enter the
+  // R total. The total must not be presented as the whole book; the count of omissions is surfaced.
+  d.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, live_stop, risk)
+     VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95, 50)`, // −1R at risk
+  );
+  d.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, risk)
+     VALUES ('t2','a','US.TSLA','USD','LONG','open', 1000, 200, 5, 0, 1, 40)`, // no stop at all → unprotected
+  );
+  insertPositionSnapshot(d, [
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, price: null, currency: "USD", time: 5000 },
+    { account: "a", symbol: "US.TSLA", qty: 5, avgCost: 200, price: null, currency: "USD", time: 5000 },
+  ]);
+  const { rTotals, byCurrency } = openPositionsByCurrency(d, 5000);
+  expect(rTotals.openRisk).toBeCloseTo(1); // only the protected −1R position; NOT the whole book
+  expect(rTotals.positionsWithoutStop).toBe(1); // the caveat: one unprotected position is omitted
+  expect(rTotals.positionsExcludedFromRisk).toBe(1); // stopOutcomeR unknown for that row
+  expect(byCurrency[0]!.positionsWithoutStop).toBe(1); // surfaced per-currency too
+});
+
 test("openPositionsByCurrency totals open risk and computes risk % of latest equity, per currency", () => {
   const d = db();
   d.run(
-    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop)
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, live_stop)
      VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95)`,
   );
   insertPositionSnapshot(d, [
@@ -99,7 +140,7 @@ test("openPositionsByCurrency totals open risk and computes risk % of latest equ
 test("openPositionsByCurrency leaves % null when a contributing account lacks equity (no partial denominator)", () => {
   const d = db();
   d.run(
-    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop)
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, live_stop)
      VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95),
             ('t2','b','US.MSFT','USD','LONG','open', 1000, 200, 5, 0, 1, 190)`,
   );
@@ -120,7 +161,7 @@ test("openPositionsByCurrency leaves % null when a contributing account lacks eq
 test("openPositionsByCurrency leaves risk % null when no equity snapshot exists", () => {
   const d = db();
   d.run(
-    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop)
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, live_stop)
      VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95)`,
   );
   insertPositionSnapshot(d, [
@@ -198,7 +239,7 @@ test("tradeDetail falls back to latest equity (approximate) when none precedes t
 test("tradeDetail reports the current holding from the latest snapshot for an open trade", () => {
   const d = db();
   d.run(
-    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop, risk)
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, live_stop, risk)
      VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95, 50)`,
   );
   insertPositionSnapshot(d, [
@@ -260,7 +301,7 @@ test("metaView surfaces currencies, setups, tags, accounts, coverage window", ()
 test("openPositions carries the open trade's id so the row can deep-link to its detail page", () => {
   const d = db();
   d.run(
-    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop)
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, live_stop)
      VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95)`,
   );
   insertPositionSnapshot(d, [

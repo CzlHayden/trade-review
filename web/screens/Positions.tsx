@@ -23,6 +23,11 @@ export function Positions() {
             <span className={`r-stat-val ${rt.openRisk ? "neg" : ""}`}>
               {rt.openRisk !== null ? rMultiple(-rt.openRisk) : "—"}
             </span>
+            {rt.positionsWithoutStop > 0 && (
+              <span className="r-stat-caveat warn" title="These positions have no working stop — their risk is real but unquantified, so it is NOT included in the figure above.">
+                + {rt.positionsWithoutStop} with no stop
+              </span>
+            )}
           </div>
           <div className="r-stat">
             <span className="r-stat-label">Open P&amp;L</span>
@@ -39,6 +44,11 @@ export function Positions() {
             {g.currency} · {g.positions.length} position{g.positions.length === 1 ? "" : "s"}
             {" · open risk "}
             <RiskFrag pct={g.riskPct} amount={g.totalOpenRisk} currency={g.currency} equityNull={g.equity === null} negative />
+            {g.positionsWithoutStop > 0 && (
+              <span className="warn" title="Excluded from this open-risk total — no working stop, so the risk can't be quantified.">
+                {" "}(+{g.positionsWithoutStop} no stop)
+              </span>
+            )}
             {g.totalUnrealized !== null && (
               <>
                 {" · open P&L "}
@@ -83,7 +93,7 @@ export function Positions() {
                       {p.price !== null ? price(p.price, p.currency) : <span className="faint">—</span>}
                     </td>
                     <td className="right num">
-                      {p.effectiveStop !== null ? price(p.effectiveStop, p.currency) : <span className="faint">none</span>}
+                      {p.liveStop !== null ? price(p.liveStop, p.currency) : <span className="warn">no stop</span>}
                     </td>
                     {/* If stopped now: signed R (− at risk / + locked), with the $ beneath and a FREE pill. */}
                     <td className="right num">

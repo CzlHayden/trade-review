@@ -75,7 +75,8 @@ export interface Trade {
   coverageOk: boolean; // false when the trade began before our data coverage (seeded)
   fillIds: string[];
   // Enrichment fields — null from trade-builder; populated by the sync pipeline (Plan 2+ modules).
-  effectiveStop: number | null;
+  effectiveStop: number | null; // latest protective stop EVER seen (may since be cancelled) — post-hoc review
+  liveStop: number | null; // latest protective stop STILL WORKING (excludes cancelled/filled) — live risk readout
   effectiveTp: number | null;
   risk: number | null;
   rMultiple: number | null;
