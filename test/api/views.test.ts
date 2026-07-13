@@ -199,6 +199,36 @@ test("openPositionsByCurrency leaves risk % null when no equity snapshot exists"
   expect(byCurrency[0]!.riskPct).toBeNull();
 });
 
+test("openPositions expresses each position's if-stopped outcome and P&L as % of its account equity", () => {
+  const d = db();
+  d.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, live_stop, risk)
+     VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95, 50)`,
+  );
+  insertPositionSnapshot(d, [
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, price: 110, currency: "USD", time: 5000 },
+  ]);
+  insertFunds(d, { account: "a", currency: "USD", totalAssets: 10_000, cash: 0, marketVal: 0, time: 5000 });
+  const p = openPositions(d, 5000)[0]!;
+  expect(p.accountEquity).toBe(10_000);
+  expect(p.stopOutcomePct).toBeCloseTo(-0.005); // stopOutcome (95−100)×10 = −50 / 10000 = 0.5% at risk
+  expect(p.unrealizedPct).toBeCloseTo(0.01); // unrealized (110−100)×10 = 100 / 10000 = +1%
+});
+
+test("openPositions leaves % of account null when the account has no equity snapshot", () => {
+  const d = db();
+  d.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, live_stop)
+     VALUES ('t1','a','US.AAPL','USD','LONG','open', 1000, 100, 10, 0, 1, 95)`,
+  );
+  insertPositionSnapshot(d, [
+    { account: "a", symbol: "US.AAPL", qty: 10, avgCost: 100, price: null, currency: "USD", time: 5000 },
+  ]);
+  const p = openPositions(d, 5000)[0]!;
+  expect(p.accountEquity).toBeNull();
+  expect(p.stopOutcomePct).toBeNull(); // no denominator → no %, never a partial/guessed figure
+});
+
 test("tradeSizing: position size as % of account equity, with basis fallback (none → latest → at_open)", () => {
   const d = db();
   d.run(

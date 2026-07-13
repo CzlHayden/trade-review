@@ -57,6 +57,9 @@ export interface OpenPosition {
   stopOutcomeR: number | null; // stopOutcome / initialRisk (signed; ≥ 0 ⇒ free trade)
   unrealizedR: number | null; // unrealized / initialRisk
   freeTrade: boolean; // stop locks in ≥ breakeven
+  accountEquity: number | null; // latest equity for this account+currency (the % denominator)
+  stopOutcomePct: number | null; // stopOutcome / equity — % of account at stake if stopped now (signed)
+  unrealizedPct: number | null; // unrealized / equity — paper P&L as % of account (signed)
   tradeId: string | null;
 }
 export interface CurrencyPositions {
