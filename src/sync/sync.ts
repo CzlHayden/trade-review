@@ -218,6 +218,29 @@ export async function pullRaw(
 }
 
 /**
+ * One-time backfill for a DB upgraded across the v9 `live_stop` migration: that column is derived and
+ * stays NULL on existing trades until a sync re-derives them, but the open-positions view treats NULL
+ * as "no working stop" — so an upgraded user would briefly see protected positions as unprotected. Fix
+ * it locally at startup (no OpenD / candles): re-infer the live stop for each OPEN trade from stored
+ * raw orders, honoring a manual stop, exactly as a sync would. Idempotent and cheap — only visits open
+ * trades still lacking a live stop, and only writes when one is actually found.
+ */
+export function backfillLiveStops(db: Database): void {
+  const open = allTrades(db).filter((t) => t.status === "open" && t.liveStop === null);
+  if (open.length === 0) return;
+  const orders = allRawOrders(db);
+  const manual = manualStops(db);
+  const upd = db.prepare("UPDATE trades SET live_stop = $ls WHERE id = $id");
+  db.transaction(() => {
+    for (const t of open) {
+      const symbolOrders = orders.filter((o) => o.account === t.account && o.symbol === t.symbol);
+      const liveStop = manual.get(t.id) ?? inferStops(t, symbolOrders).liveStop;
+      if (liveStop !== null) upd.run({ $ls: liveStop, $id: t.id });
+    }
+  })();
+}
+
+/**
  * Phase 2 — rebuild ALL derived trades/flags from the full raw set. Pure of the network: it reads
  * only the local DB (+ candles) and fully replaces derived data, so it is also the recompute path
  * for a manual-stop or rule-config edit (no OpenD round-trip). Candle-fetch failure degrades to no
@@ -267,6 +290,9 @@ export async function rebuildDerived(
     const ms = manual.get(t.id);
     const initialStop = ms ?? stop.initialStop; // initial = planned risk (spec §6)
     const effectiveStop = ms ?? stop.effectiveStop;
+    // Live stop = the still-working protective stop (excludes cancelled/filled); a manual stop is the
+    // user's explicit current stop, so it overrides here too. Powers the open-positions risk readout.
+    const liveStop = ms ?? stop.liveStop;
     // A manual stop is the user asserting the risk basis explicitly — honor it even on a seeded /
     // split-affected trade (their escape hatch when the tool can't reconstruct the original stop).
     const { risk, rMultiple } = computeRisk(t, initialStop, { manual: ms != null });
@@ -297,6 +323,7 @@ export async function rebuildDerived(
     const enriched: Trade = {
       ...t,
       effectiveStop,
+      liveStop,
       effectiveTp: stop.effectiveTp,
       risk,
       rMultiple,

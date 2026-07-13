@@ -202,6 +202,9 @@ export function mapPosition(raw: any, account: string, snapshotMs: number, marke
     symbol: futuSymbol(raw.code, mkt),
     qty: raw.positionSide === 1 ? -qtyAbs : qtyAbs, // PositionSide: 1 = Short
     avgCost,
+    // Current market price (FUTU's `price`). `> 0` guard: protobufjs decodes an omitted field as 0,
+    // and a real quote is never 0 — treat 0/absent as "unknown" rather than a bogus $0 mark.
+    price: raw.price > 0 ? raw.price : null,
     currency: currencyForEnum(raw.currency) !== "UNKNOWN" ? currencyForEnum(raw.currency) : currencyForMarket(mkt),
     time: snapshotMs,
   };

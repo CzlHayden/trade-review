@@ -169,6 +169,19 @@ export const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
       );
     `);
   },
+  // v8 — capture the current market price FUTU already returns in each position snapshot (we only
+  // stored avg cost + qty). Powers unrealized-P&L / R on open positions. Nullable: rows written by an
+  // older app, and any snapshot where FUTU omits the price, stay NULL.
+  (db) => {
+    db.run(`ALTER TABLE raw_positions ADD COLUMN price REAL;`);
+  },
+  // v9 — persist the LIVE stop (latest still-working protective stop) alongside the effective stop.
+  // The effective stop is the latest ever seen and may since have been cancelled; the open-positions
+  // risk readout must use the live one so a cancelled stop is never shown as active protection.
+  // Derived column: rebuilt every sync from raw orders, so NULL until the next sync re-derives trades.
+  (db) => {
+    db.run(`ALTER TABLE trades ADD COLUMN live_stop REAL;`);
+  },
 ];
 
 export function currentVersion(db: Database): number {

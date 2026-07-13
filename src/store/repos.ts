@@ -86,14 +86,14 @@ export function allRawOrders(db: Database): RawOrder[] {
 
 export function insertPositionSnapshot(db: Database, rows: RawPosition[]): void {
   const stmt = db.prepare(
-    `INSERT OR REPLACE INTO raw_positions (account, symbol, qty, avg_cost, currency, time)
-     VALUES ($account, $symbol, $qty, $avgCost, $currency, $time)`,
+    `INSERT OR REPLACE INTO raw_positions (account, symbol, qty, avg_cost, price, currency, time)
+     VALUES ($account, $symbol, $qty, $avgCost, $price, $currency, $time)`,
   );
   db.transaction(() => {
     for (const p of rows) {
       stmt.run({
         $account: p.account, $symbol: p.symbol, $qty: p.qty, $avgCost: p.avgCost,
-        $currency: p.currency, $time: p.time,
+        $price: p.price, $currency: p.currency, $time: p.time,
       });
     }
   })();
@@ -106,12 +106,12 @@ export function insertPositionSnapshot(db: Database, rows: RawPosition[]): void 
  * would silently return the previous, non-empty batch. */
 export function positionsAt(db: Database, snapshotTime: number): RawPosition[] {
   const rows = db
-    .query(`SELECT account, symbol, qty, avg_cost, currency, time FROM raw_positions
+    .query(`SELECT account, symbol, qty, avg_cost, price, currency, time FROM raw_positions
             WHERE time = ? ORDER BY account ASC, symbol ASC`)
     .all(snapshotTime) as any[];
   return rows.map((r) => ({
     account: r.account, symbol: r.symbol, qty: r.qty, avgCost: r.avg_cost,
-    currency: r.currency, time: r.time,
+    price: r.price ?? null, currency: r.currency, time: r.time,
   }));
 }
 
@@ -124,11 +124,11 @@ export function replaceDerived(db: Database, trades: Trade[], flags: Map<string,
     `INSERT INTO trades
        (id, account, symbol, currency, direction, status, open_time, close_time, avg_entry,
         avg_exit, max_qty, realized_pnl, fees, hold_seconds, coverage_ok,
-        effective_stop, effective_tp, risk, r_multiple, mae, mfe)
+        effective_stop, live_stop, effective_tp, risk, r_multiple, mae, mfe)
      VALUES
        ($id, $account, $symbol, $currency, $direction, $status, $openTime, $closeTime, $avgEntry,
         $avgExit, $maxQty, $realizedPnl, $fees, $holdSeconds, $coverageOk,
-        $effectiveStop, $effectiveTp, $risk, $rMultiple, $mae, $mfe)`,
+        $effectiveStop, $liveStop, $effectiveTp, $risk, $rMultiple, $mae, $mfe)`,
   );
   const insLink = db.prepare(`INSERT INTO trade_fills (trade_id, fill_id) VALUES ($t, $f)`);
   const insFlag = db.prepare(
@@ -145,7 +145,7 @@ export function replaceDerived(db: Database, trades: Trade[], flags: Map<string,
         $direction: t.direction, $status: t.status, $openTime: t.openTime, $closeTime: t.closeTime,
         $avgEntry: t.avgEntry, $avgExit: t.avgExit, $maxQty: t.maxQty, $realizedPnl: t.realizedPnl,
         $fees: t.fees, $holdSeconds: t.holdSeconds, $coverageOk: t.coverageOk ? 1 : 0,
-        $effectiveStop: t.effectiveStop, $effectiveTp: t.effectiveTp, $risk: t.risk,
+        $effectiveStop: t.effectiveStop, $liveStop: t.liveStop, $effectiveTp: t.effectiveTp, $risk: t.risk,
         $rMultiple: t.rMultiple, $mae: t.mae, $mfe: t.mfe,
       });
       for (const fid of t.fillIds) insLink.run({ $t: t.id, $f: fid });
@@ -173,7 +173,7 @@ export function allTrades(db: Database): Trade[] {
     avgExit: r.avg_exit, maxQty: r.max_qty, realizedPnl: r.realized_pnl, fees: r.fees,
     holdSeconds: r.hold_seconds, coverageOk: r.coverage_ok === 1,
     fillIds: byTrade.get(r.id) ?? [],
-    effectiveStop: r.effective_stop, effectiveTp: r.effective_tp, risk: r.risk,
+    effectiveStop: r.effective_stop, liveStop: r.live_stop, effectiveTp: r.effective_tp, risk: r.risk,
     rMultiple: r.r_multiple, mae: r.mae, mfe: r.mfe,
   }));
 }

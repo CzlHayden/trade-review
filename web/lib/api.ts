@@ -47,21 +47,43 @@ export interface OpenPosition {
   currency: string;
   qty: number;
   avgCost: number;
-  effectiveStop: number | null;
-  openRisk: number | null;
+  price: number | null; // current market price (snapshot); null when unknown
+  liveStop: number | null; // the stop still working now (excludes cancelled/filled); null when unprotected
+  stopOutcome: number | null; // signed $ if stopped now (− loss / + locked profit)
+  openRisk: number | null; // loss still exposed (0 = free trade); null when no stop
+  lockedProfit: number | null; // profit locked in if stopped
+  unrealized: number | null; // paper P&L now
+  initialRisk: number | null; // 1R in this currency
+  stopOutcomeR: number | null; // stopOutcome / initialRisk (signed; ≥ 0 ⇒ free trade)
+  unrealizedR: number | null; // unrealized / initialRisk
+  freeTrade: boolean; // stop locks in ≥ breakeven
   tradeId: string | null;
 }
 export interface CurrencyPositions {
   currency: string;
   positions: OpenPosition[];
   totalOpenRisk: number | null;
+  totalLockedProfit: number | null;
+  totalUnrealized: number | null;
+  positionsWithoutStop: number; // excluded from totalOpenRisk (no live stop)
+  positionsWithoutPrice: number; // excluded from totalUnrealized (no price)
   deployed: number;
   equity: number | null;
   riskPct: number | null;
+  unrealizedPct: number | null;
   deployedPct: number | null;
+}
+/** Portfolio totals in R — dimensionless, so these sum across currencies (unlike dollars). */
+export interface RTotals {
+  openRisk: number | null;
+  unrealized: number | null;
+  unprotected: number; // positions with no live stop (understate risk); subset of openRiskOmitted
+  openRiskOmitted: number; // positions excluded from openRisk (no live stop OR no 1R basis)
+  unrealizedOmitted: number; // positions excluded from unrealized (no price OR no 1R basis)
 }
 export interface PositionsResponse {
   byCurrency: CurrencyPositions[];
+  rTotals: RTotals;
 }
 
 export interface Meta {

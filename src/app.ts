@@ -12,7 +12,7 @@ import { yahooCandles } from "./candles/yahoo";
 import { buildApi } from "./api/routes";
 import { SyncRunner } from "./api/sync-runner";
 import { Mutex } from "./api/mutex";
-import { runSync, type SyncResult } from "./sync/sync";
+import { runSync, backfillLiveStops, type SyncResult } from "./sync/sync";
 import { connectFutu } from "./futu/client";
 import { checkForUpdate, type UpdateStatus } from "./api/update";
 import pkg from "../package.json";
@@ -43,6 +43,9 @@ export function main(): void {
   backupDb(path, backupStamp()); // no-op on first run; cheap insurance now that journal data is precious
   const db = openDb(path);
   runMigrations(db);
+  // After migrating, populate the v9 `live_stop` column for existing open trades so the positions
+  // view shows correct protection immediately — before (and without needing) the first OpenD sync.
+  backfillLiveStops(db);
   const config = getRuleConfig(db);
   const candles = cachedCandles(db, yahooCandles, { now: Date.now }); // live clock (long-lived server)
 

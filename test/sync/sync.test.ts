@@ -137,12 +137,12 @@ test("runSync snapshots current positions at the sync clock", async () => {
   const db = openTestDb();
   const client = stubClient({
     getPositions: async () => [
-      { account: "acc1", symbol: "US.AAPL", qty: 100, avgCost: 10, currency: "USD", time: 0 },
+      { account: "acc1", symbol: "US.AAPL", qty: 100, avgCost: 10, price: null, currency: "USD", time: 0 },
     ],
   });
   await runSync({ db, client, candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 10_000 });
   const held = positionsAt(db, 10_000);
-  expect(held).toEqual([{ account: "acc1", symbol: "US.AAPL", qty: 100, avgCost: 10, currency: "USD", time: 10_000 }]);
+  expect(held).toEqual([{ account: "acc1", symbol: "US.AAPL", qty: 100, avgCost: 10, price: null, currency: "USD", time: 10_000 }]);
 });
 
 test("runSync is incremental — second run pulls from the last cursor", async () => {
@@ -240,7 +240,7 @@ test("runSync does NOT carry forward MAE/MFE when the trade shape changed (open 
     getCandles: async () => [{ time: 1000, open: 10, high: 13, low: 8, close: 11, volume: 1 }],
   };
   const held: RawPosition[] = [
-    { account: "acc1", symbol: "US.AAPL", qty: 100, avgCost: 10, currency: "USD", time: 0 },
+    { account: "acc1", symbol: "US.AAPL", qty: 100, avgCost: 10, price: null, currency: "USD", time: 0 },
   ];
   // sync 1: opening BUY, still holding (snapshot reflects the 100 long → no seed) → trade OPEN;
   // candles present → mae computed on the open window.
@@ -277,7 +277,7 @@ function rawFill(side: "BUY" | "SELL", qty: number, over: Partial<RawFill> = {})
 function pos(qty: number, over: Partial<RawPosition> = {}): RawPosition {
   return {
     account: over.account ?? "acc1", symbol: over.symbol ?? "US.AAPL", qty,
-    avgCost: over.avgCost ?? 10, currency: over.currency ?? "USD", time: over.time ?? 5000,
+    avgCost: over.avgCost ?? 10, price: over.price ?? null, currency: over.currency ?? "USD", time: over.time ?? 5000,
   };
 }
 

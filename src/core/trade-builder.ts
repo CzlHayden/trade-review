@@ -128,6 +128,7 @@ function finalize(acc: Acc): Trade {
     coverageOk: acc.coverageOk,
     fillIds: acc.fillIds,
     effectiveStop: null,
+    liveStop: null,
     effectiveTp: null,
     risk: null,
     rMultiple: null,
