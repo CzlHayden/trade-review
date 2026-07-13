@@ -1,9 +1,10 @@
 import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/store/migrations";
-import { rebuildDerived } from "../../src/sync/sync";
-import { allTrades, insertPositionSnapshot, upsertRawFills } from "../../src/store/repos";
+import { rebuildDerived, backfillLiveStops } from "../../src/sync/sync";
+import { allTrades, insertPositionSnapshot, upsertRawFills, upsertRawOrders } from "../../src/store/repos";
 import { upsertJournal } from "../../src/store/journal";
+import { order } from "../helpers";
 import { setConfigValue, LAST_SNAPSHOT_TIME } from "../../src/store/config";
 import { upsertSyncState } from "../../src/store/sync-state";
 import { DEFAULT_RULE_CONFIG } from "../../src/domain/types";
@@ -16,6 +17,34 @@ function seedRoundTrip(db: Database) {
     { id: "f2", orderId: "o2", symbol: "US.AAPL", side: "SELL", qty: 10, price: 110, fee: 0, currency: "USD", time: 2000, account: "a" },
   ]);
 }
+
+test("backfillLiveStops fills live_stop for open trades from stored orders (upgraded DB, pre first sync)", () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  // Simulate a v9-migrated DB whose trades predate the live_stop column: an OPEN trade with a working
+  // protective stop order, but live_stop still NULL (never re-derived). No OpenD / candles involved.
+  db.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop)
+     VALUES ('t1','acc1','AAPL','USD','LONG','open', 60000, 10, 100, 0, 1, 9)`,
+  );
+  upsertRawOrders(db, [order("SELL", "STOP", 100, { triggerPrice: 9, createTime: 120000, status: "SUBMITTED" })]);
+  expect(allTrades(db)[0]!.liveStop).toBeNull(); // column exists but is empty until backfill/sync
+
+  backfillLiveStops(db);
+  expect(allTrades(db)[0]!.liveStop).toBe(9); // inferred from the working stop order, no sync needed
+});
+
+test("backfillLiveStops leaves live_stop NULL when the only stop was cancelled (genuinely unprotected)", () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  db.run(
+    `INSERT INTO trades (id, account, symbol, currency, direction, status, open_time, avg_entry, max_qty, fees, coverage_ok, effective_stop)
+     VALUES ('t1','acc1','AAPL','USD','LONG','open', 60000, 10, 100, 0, 1, 9)`,
+  );
+  upsertRawOrders(db, [order("SELL", "STOP", 100, { triggerPrice: 9, createTime: 120000, status: "CANCELLED_ALL" })]);
+  backfillLiveStops(db);
+  expect(allTrades(db)[0]!.liveStop).toBeNull(); // a cancelled stop is not live → still unprotected
+});
 
 test("rebuildDerived rebuilds trades from raw with no OpenD involved", async () => {
   const db = new Database(":memory:");
