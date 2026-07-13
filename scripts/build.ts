@@ -56,11 +56,18 @@ function resolveTarget(arg: string): TargetSpec {
 function makeMacApp(appParent: string, binaryPath: string): string {
   const appDir = join(appParent, `${APP_NAME}.app`);
   const macOsDir = join(appDir, "Contents", "MacOS");
+  const resDir = join(appDir, "Contents", "Resources");
   rmSync(appDir, { recursive: true, force: true });
   mkdirSync(macOsDir, { recursive: true });
+  mkdirSync(resDir, { recursive: true });
   const exeName = "trade-review";
   copyFileSync(binaryPath, join(macOsDir, exeName));
   chmodSync(join(macOsDir, exeName), 0o755);
+  // App icon: bundle assets/AppIcon.icns (regenerate with scripts/make-icon.py). CFBundleIconFile is
+  // the base name, no extension. Skip gracefully if the .icns is missing (falls back to a blank icon).
+  const iconSrc = join(import.meta.dir, "..", "assets", "AppIcon.icns");
+  const hasIcon = existsSync(iconSrc);
+  if (hasIcon) copyFileSync(iconSrc, join(resDir, "AppIcon.icns"));
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -72,7 +79,12 @@ function makeMacApp(appParent: string, binaryPath: string): string {
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleExecutable</key><string>${exeName}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>${hasIcon ? `\n  <key>CFBundleIconFile</key><string>AppIcon</string>` : ""}
+  <!-- Agent app: Trade Review is a local server whose UI is the browser it opens. Without this it's a
+       plain CLI wrapped in a .app, so macOS shows the "launching" Dock bounce forever (it never opens a
+       native window to check in). LSUIElement makes it a background agent — no endless bounce, no Dock
+       icon; quit it from the power button in the web UI. -->
+  <key>LSUIElement</key><true/>
 </dict>
 </plist>
 `;
