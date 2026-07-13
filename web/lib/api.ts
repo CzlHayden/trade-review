@@ -60,6 +60,7 @@ export interface OpenPosition {
   cushionR: number | null; // cushion / initialRisk (signed; ≥ 0 ⇒ free trade)
   totalPnlR: number | null; // totalPnl / initialRisk
   freeTrade: boolean; // cushion locks in ≥ breakeven (banked profit included)
+  breakevenStop: number | null; // stop PRICE that brings the cushion to 0 (where to move the stop for net breakeven); null when qty is 0
   accountEquity: number | null; // latest equity for this account+currency (the % denominator)
   cushionPct: number | null; // cushion / equity — % of account at stake if stopped now (signed)
   totalPnlPct: number | null; // totalPnl / equity — whole-trade P&L as % of account (signed)

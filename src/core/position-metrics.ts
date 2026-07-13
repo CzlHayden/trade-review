@@ -26,6 +26,7 @@ export interface PositionMetrics {
   totalPnl: number | null; // whole trade so far = realizedSoFar + unrealized; null when price unknown
   totalPnlR: number | null; // totalPnl ÷ initialRisk
   freeTrade: boolean; // the cushion locks in ≥ breakeven (house money, banked profit included)
+  breakevenStop: number | null; // stop PRICE that makes the cushion exactly 0 (net breakeven incl. banked); null when qty is 0
 }
 
 function perR(dollars: number | null, initialRisk: number | null): number | null {
@@ -40,6 +41,9 @@ export function positionMetrics(i: PositionMetricsInput): PositionMetrics {
   const cushion = stopOutcome === null ? null : stopOutcome + i.realizedSoFar;
   const unrealized = i.price === null ? null : (i.price - i.avgCost) * i.qty;
   const totalPnl = unrealized === null ? null : unrealized + i.realizedSoFar;
+  // Stop price where cushion = 0: realizedSoFar + (stop − avgCost)·qty = 0 ⇒ stop = avgCost − realizedSoFar/qty.
+  // Where to move the stop to make the whole trade breakeven (the banked profit lets it sit below entry).
+  const breakevenStop = i.qty === 0 ? null : i.avgCost - i.realizedSoFar / i.qty;
   return {
     realizedSoFar: i.realizedSoFar,
     stopOutcome,
@@ -51,5 +55,6 @@ export function positionMetrics(i: PositionMetricsInput): PositionMetrics {
     totalPnl,
     totalPnlR: perR(totalPnl, i.initialRisk),
     freeTrade: cushion !== null && cushion >= 0,
+    breakevenStop,
   };
 }

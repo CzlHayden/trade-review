@@ -113,3 +113,29 @@ test("unknown initial risk → R fields null, dollar fields still present", () =
   expect(m.openRisk).toBe(50);
   expect(m.unrealized).toBe(100);
 });
+
+test("breakeven stop, nothing banked: it's simply the entry (move the stop to breakeven)", () => {
+  const m = positionMetrics(LONG); // avgCost 100, realizedSoFar 0
+  expect(m.breakevenStop).toBe(100);
+});
+
+test("breakeven stop with banked profit sits below entry (the cushion lets the stop breathe)", () => {
+  // Bought 10 @ 100, sold 4 @ 130 (+120 banked), holding 6. Net breakeven when (stop-100)*6 = -120 ⇒ stop 80.
+  const m = positionMetrics({ avgCost: 100, qty: 6, price: 140, stop: 95, initialRisk: 50, realizedSoFar: 120 });
+  expect(m.breakevenStop).toBe(80); // 100 - 120/6
+  // sanity: a stop exactly there yields a zero cushion
+  expect(positionMetrics({ avgCost: 100, qty: 6, price: 140, stop: 80, initialRisk: 50, realizedSoFar: 120 }).cushion).toBe(0);
+});
+
+test("breakeven stop for a short sits above entry (direction via signed qty)", () => {
+  // Short 10 @ 100, banked +80. Net breakeven when (stop-100)*-10 = -80 ⇒ stop 108.
+  const m = positionMetrics({ avgCost: 100, qty: -10, price: 90, stop: 105, initialRisk: 50, realizedSoFar: 80 });
+  expect(m.breakevenStop).toBe(108); // 100 - 80/(-10)
+});
+
+test("breakeven stop with a BANKED LOSS sits above entry — remaining shares must recover the loss", () => {
+  // Long 10 @ 100, but partial exits banked −40. Net breakeven needs (stop-100)*10 = +40 ⇒ stop 104.
+  const m = positionMetrics({ avgCost: 100, qty: 10, price: 105, stop: 95, initialRisk: 50, realizedSoFar: -40 });
+  expect(m.breakevenStop).toBe(104); // 100 - (-40)/10
+  expect(positionMetrics({ avgCost: 100, qty: 10, price: 105, stop: 104, initialRisk: 50, realizedSoFar: -40 }).cushion).toBe(0);
+});
