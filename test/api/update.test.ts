@@ -27,16 +27,16 @@ test("parseRelease pulls tag, html_url, and assets from the GitHub payload", () 
     tag_name: "v0.7.0",
     html_url: "https://github.com/keithzrc/trade-review/releases/tag/v0.7.0",
     assets: [
-      { name: "trade-review-macos-arm64.zip", browser_download_url: "https://x/arm64.zip" },
-      { name: "trade-review-windows-x64.exe", browser_download_url: "https://x/win.exe" },
+      { name: "trade-review-macos-arm64.zip", browser_download_url: "https://github.com/x/arm64.zip" },
+      { name: "trade-review-windows-x64.exe", browser_download_url: "https://github.com/x/win.exe" },
     ],
   });
   expect(rel).toEqual({
     version: "0.7.0",
     releaseUrl: "https://github.com/keithzrc/trade-review/releases/tag/v0.7.0",
     assets: [
-      { name: "trade-review-macos-arm64.zip", url: "https://x/arm64.zip" },
-      { name: "trade-review-windows-x64.exe", url: "https://x/win.exe" },
+      { name: "trade-review-macos-arm64.zip", url: "https://github.com/x/arm64.zip" },
+      { name: "trade-review-windows-x64.exe", url: "https://github.com/x/win.exe" },
     ],
   });
 });
@@ -45,6 +45,29 @@ test("parseRelease returns null on a malformed payload", () => {
   expect(parseRelease(null)).toBe(null);
   expect(parseRelease({})).toBe(null); // no tag_name
   expect(parseRelease({ tag_name: 5 })).toBe(null);
+});
+
+test("parseRelease skips null/primitive asset entries without throwing", () => {
+  const rel = parseRelease({
+    tag_name: "v0.7.0",
+    html_url: "https://github.com/keithzrc/trade-review/releases/tag/v0.7.0",
+    assets: [null, 42, { name: "trade-review-macos-arm64.zip", browser_download_url: "https://github.com/x/arm64.zip" }],
+  });
+  expect(rel?.assets).toEqual([{ name: "trade-review-macos-arm64.zip", url: "https://github.com/x/arm64.zip" }]);
+});
+
+test("parseRelease drops non-github / non-https URLs (no off-site or javascript: links)", () => {
+  const rel = parseRelease({
+    tag_name: "v0.7.0",
+    html_url: "javascript:alert(1)", // hostile release page → dropped to ""
+    assets: [
+      { name: "evil.exe", browser_download_url: "https://evil.example/evil.exe" }, // wrong host → dropped
+      { name: "js.exe", browser_download_url: "javascript:alert(1)" }, // scheme → dropped
+      { name: "trade-review-windows-x64.exe", browser_download_url: "https://github.com/x/win.exe" }, // kept
+    ],
+  });
+  expect(rel?.releaseUrl).toBe("");
+  expect(rel?.assets).toEqual([{ name: "trade-review-windows-x64.exe", url: "https://github.com/x/win.exe" }]);
 });
 
 test("buildUpdateStatus flags an available update and picks this platform's download", () => {
@@ -93,14 +116,14 @@ test("checkForUpdate: happy path uses the injected fetcher and reports an update
     new Response(
       JSON.stringify({
         tag_name: "v0.7.0",
-        html_url: "https://rel",
-        assets: [{ name: "trade-review-macos-arm64.zip", browser_download_url: "https://dl/arm64.zip" }],
+        html_url: "https://github.com/o/r/releases/tag/v0.7.0",
+        assets: [{ name: "trade-review-macos-arm64.zip", browser_download_url: "https://github.com/o/r/releases/download/v0.7.0/arm64.zip" }],
       }),
       { status: 200 },
     );
   const s = await checkForUpdate({ current: "0.6.0", platform: "darwin", arch: "arm64", repo: "o/r", fetchImpl });
   expect(s.updateAvailable).toBe(true);
-  expect(s.downloadUrl).toBe("https://dl/arm64.zip");
+  expect(s.downloadUrl).toBe("https://github.com/o/r/releases/download/v0.7.0/arm64.zip");
   expect(s.error).toBe(null);
 });
 

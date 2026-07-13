@@ -42,19 +42,30 @@ export function expectedAssetName(platform: string, arch: string): string | null
   return null;
 }
 
+/** A URL we're willing to render as a link / hand to the browser: https on github.com only. Anything
+ * else (a `javascript:` scheme, an off-site host) is rejected — the banner's Download link is
+ * user-trusted, so even a hypothetical GitHub-API compromise can't point it off github.com. */
+function safeGithubUrl(u: unknown): string | null {
+  if (typeof u !== "string") return null;
+  try {
+    const url = new URL(u);
+    return url.protocol === "https:" && url.hostname === "github.com" ? u : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Extract the fields we need from the GitHub `releases/latest` payload; null if it isn't shaped as
  * expected (so a GitHub change / error body degrades to "couldn't check" rather than throwing). */
 export function parseRelease(json: unknown): ReleaseInfo | null {
   if (json === null || typeof json !== "object") return null;
   const o = json as Record<string, unknown>;
   if (typeof o.tag_name !== "string") return null;
-  const releaseUrl = typeof o.html_url === "string" ? o.html_url : "";
+  const releaseUrl = safeGithubUrl(o.html_url) ?? "";
   const rawAssets = Array.isArray(o.assets) ? o.assets : [];
   const assets = rawAssets
-    .map((a) => {
-      const ao = a as Record<string, unknown>;
-      return { name: typeof ao.name === "string" ? ao.name : "", url: typeof ao.browser_download_url === "string" ? ao.browser_download_url : "" };
-    })
+    .filter((a): a is Record<string, unknown> => a !== null && typeof a === "object")
+    .map((ao) => ({ name: typeof ao.name === "string" ? ao.name : "", url: safeGithubUrl(ao.browser_download_url) ?? "" }))
     .filter((a) => a.name.length > 0 && a.url.length > 0);
   return { version: o.tag_name.replace(/^v/, ""), releaseUrl, assets };
 }
@@ -101,6 +112,7 @@ export async function checkForUpdate(opts: {
   try {
     const res = await doFetch(`https://api.github.com/repos/${repo}/releases/latest`, {
       headers: { accept: "application/vnd.github+json", "user-agent": "trade-review" },
+      signal: AbortSignal.timeout(10_000), // don't let a stalled GitHub hang /api/update/check forever
     });
     if (!res.ok) {
       return buildUpdateStatus(current, null, platform, arch, `GitHub returned ${res.status}`);
