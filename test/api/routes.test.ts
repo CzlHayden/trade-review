@@ -584,6 +584,22 @@ test("POST /api/quit rejects a cross-site (drive-by) request without shutting do
   expect(quits).toBe(0);
 });
 
+test("GET /api/update/check returns the injected checker's status", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  const status = { current: "0.6.0", latest: "0.7.0", updateAvailable: true, downloadUrl: "https://dl", releaseUrl: "https://rel", error: null };
+  const app = buildApi(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 0, checkUpdate: async () => status });
+  const body: any = await (await app(new Request("http://127.0.0.1:8123/api/update/check"))).json();
+  expect(body).toEqual(status);
+});
+
+test("GET /api/update/check reports disabled when no checker is wired", async () => {
+  const { app } = await api(); // no checkUpdate dep
+  const body: any = await (await app(new Request("http://127.0.0.1:8123/api/update/check"))).json();
+  expect(body.updateAvailable).toBe(false);
+  expect(body.error).toBe("update check unavailable");
+});
+
 test("GET /api/settings/opend reports default port + no key on a fresh DB", async () => {
   const db = new Database(":memory:");
   runMigrations(db);

@@ -103,6 +103,18 @@ export function useQuit() {
   return useMutation({ mutationFn: api.quit });
 }
 
+/** Notify-only update check. Slow cadence — a new release doesn't appear mid-session often, and the
+ * unauthenticated GitHub API is rate-limited (60/hr). The server also caches for 6h. */
+export const useUpdateCheck = () =>
+  useQuery({
+    queryKey: ["updateCheck"],
+    queryFn: api.updateCheck,
+    staleTime: 6 * 60 * 60_000,
+    refetchInterval: 6 * 60 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
 export const useOpendSettings = () =>
   useQuery({ queryKey: ["opendSettings"], queryFn: api.opendSettings });
 

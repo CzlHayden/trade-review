@@ -70,6 +70,14 @@ Your key and all your data live only on this computer, in your user data folder:
 
 The app makes a backup of its database before every launch.
 
+## Updates
+
+When a newer version is released, Trade Review shows a banner at the top: **"Trade Review X.Y.Z is
+available"**. Click **Download** to get the new build for your computer from the Releases page, then
+install it the same way you did the first time (replace the old app / run the new `.exe`). The app
+never changes itself — you're always in control of when to update. Dismiss the banner and it won't
+reappear until an even newer version ships.
+
 ## Troubleshooting
 
 | Problem | Likely cause |

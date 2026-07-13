@@ -599,3 +599,52 @@ table.data tbody tr.clickable {
   border-radius: 4px;
   background: color-mix(in srgb, var(--text) 8%, transparent);
 }
+
+/* ---- update banner ---- */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.update-banner-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.update-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+.btn.btn-sm {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+.update-banner-link {
+  color: var(--accent);
+  font-size: 12px;
+  text-decoration: none;
+}
+.update-banner-link:hover {
+  text-decoration: underline;
+}
+.update-banner-close {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 4px;
+  line-height: 1;
+}
+.update-banner-close:hover {
+  color: var(--text);
+}
