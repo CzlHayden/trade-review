@@ -80,6 +80,25 @@ function makeMacApp(appParent: string, binaryPath: string): string {
   return appDir;
 }
 
+/** Re-sign the .app with a valid ad-hoc signature. Bun's `--compile` emits a "linker-signed" ad-hoc
+ * signature that does NOT seal the payload it appends after the Mach-O, so `codesign --verify` reports
+ * "code or signature have been modified" — and a DOWNLOADED (quarantined) copy then shows the dead-end
+ * "\"Trade Review\" is damaged and can't be opened" dialog instead of the normal, recoverable
+ * "unidentified developer → Open Anyway" flow. A plain `codesign --sign -` reseals the whole bundle,
+ * which fixes the "damaged" message. It stays UNNOTARIZED (removing the warning entirely needs a paid
+ * Apple Developer ID), so users still Open Anyway once — as the README describes. codesign is macOS-only,
+ * so this is a warn-and-skip no-op when cross-building a darwin target from another OS. */
+function codesignMacApp(appDir: string): void {
+  if (process.platform !== "darwin") {
+    console.warn(`⚠ host is ${process.platform}, not macOS — leaving the .app unsigned (codesign unavailable)`);
+    return;
+  }
+  const sign = Bun.spawnSync(["codesign", "--force", "--deep", "--sign", "-", appDir], { stdout: "inherit", stderr: "inherit" });
+  if (!sign.success) throw new Error("codesign failed — the .app would ship with Bun's invalid signature");
+  const verify = Bun.spawnSync(["codesign", "--verify", "--verbose", appDir], { stdout: "inherit", stderr: "inherit" });
+  if (!verify.success) throw new Error("codesign --verify failed after signing");
+}
+
 async function main() {
   const arg = process.argv[2] ?? "current";
   const spec = resolveTarget(arg);
@@ -118,6 +137,7 @@ async function main() {
     const appParent = join(distDir, `app-${spec.outName.replace(/^trade-review-/, "")}`);
     mkdirSync(appParent, { recursive: true });
     const app = makeMacApp(appParent, built);
+    codesignMacApp(app);
     console.log(`✓ ${app}`);
   }
 }
