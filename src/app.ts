@@ -12,7 +12,7 @@ import { yahooCandles } from "./candles/yahoo";
 import { buildApi } from "./api/routes";
 import { SyncRunner } from "./api/sync-runner";
 import { Mutex } from "./api/mutex";
-import { runSync, backfillLiveStops, type SyncResult } from "./sync/sync";
+import { runSync, rebuildDerived, type SyncResult } from "./sync/sync";
 import { connectFutu } from "./futu/client";
 import { checkForUpdate, type UpdateStatus } from "./api/update";
 import pkg from "../package.json";
@@ -38,16 +38,23 @@ function openBrowser(url: string): void {
   }
 }
 
-export function main(): void {
+export async function main(): Promise<void> {
   const path = dbPath();
   backupDb(path, backupStamp()); // no-op on first run; cheap insurance now that journal data is precious
   const db = openDb(path);
   runMigrations(db);
-  // After migrating, populate the v9 `live_stop` column for existing open trades so the positions
-  // view shows correct protection immediately — before (and without needing) the first OpenD sync.
-  backfillLiveStops(db);
   const config = getRuleConfig(db);
   const candles = cachedCandles(db, yahooCandles, { now: Date.now }); // live clock (long-lived server)
+
+  // One-time local rebuild after a migration introduces a DERIVED column (v9 live_stop, v10
+  // realized_so_far): those are NULL on existing trades until re-derived, and the positions view would
+  // otherwise show stale live stops / zero banked profit until the first sync. Rebuild from local raw
+  // data only — a no-op candle source keeps it offline and preserves prior MAE/MFE. The NULL guard runs
+  // this at most once per upgrade (replaceDerived then writes a value for every trade).
+  const needsBackfill = db.query(`SELECT 1 FROM trades WHERE realized_so_far IS NULL LIMIT 1`).get() != null;
+  if (needsBackfill) {
+    await rebuildDerived(db, { candles: { getCandles: async () => [] }, config, now: Date.now() });
+  }
 
   // Shared by the sync job and journal-triggered rebuilds so the two rebuilds never interleave.
   const rebuildLock = new Mutex();
@@ -120,4 +127,4 @@ export function main(): void {
   if (process.env.NO_OPEN !== "1") openBrowser(openUrl);
 }
 
-if (import.meta.main) main();
+if (import.meta.main) void main();
