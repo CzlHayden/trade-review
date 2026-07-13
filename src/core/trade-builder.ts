@@ -12,8 +12,10 @@ interface Acc {
   openId: string; // id of the opening fill (or "seed") — makes the trade id collision-safe
   entryQty: number;
   entryValue: number;
+  entryFees: number; // fees paid on entries so far — folded into the cost basis for realized-so-far
   exitQty: number;
   exitValue: number;
+  realizedSoFar: number; // profit BOOKED at each exit using the cost basis as-of that exit (see applyExit)
   fees: number;
   maxQty: number;
   position: number; // signed
@@ -44,8 +46,10 @@ function newAcc(f: RawFill, direction: Direction, coverageOk: boolean): Acc {
     openId: f.id,
     entryQty: 0,
     entryValue: 0,
+    entryFees: 0,
     exitQty: 0,
     exitValue: 0,
+    realizedSoFar: 0,
     fees: 0,
     maxQty: 0,
     position: 0,
@@ -67,8 +71,10 @@ function seedAcc(seed: SeedPosition): Acc {
     openId: "seed",
     entryQty: qtyAbs,
     entryValue: qtyAbs * seed.avgCost, // real cost basis → sane avgEntry/PnL
+    entryFees: 0, // pre-coverage seed carries no known fees
     exitQty: 0,
     exitValue: 0,
+    realizedSoFar: 0,
     fees: 0,
     maxQty: qtyAbs,
     position: seed.qty,
@@ -80,9 +86,11 @@ function seedAcc(seed: SeedPosition): Acc {
 
 /** Apply a quantity portion of a fill as an entry (increasing exposure). */
 function applyEntry(acc: Acc, f: RawFill, qty: number): void {
+  const feeShare = f.fee * (qty / f.qty);
   acc.entryQty += qty;
   acc.entryValue += qty * f.price;
-  acc.fees += f.fee * (qty / f.qty);
+  acc.entryFees += feeShare;
+  acc.fees += feeShare;
   acc.position += acc.direction === "LONG" ? qty : -qty;
   acc.maxQty = Math.max(acc.maxQty, Math.abs(acc.position));
   acc.lastTime = f.time;
@@ -91,9 +99,19 @@ function applyEntry(acc: Acc, f: RawFill, qty: number): void {
 
 /** Apply a quantity portion of a fill as an exit (reducing exposure). */
 function applyExit(acc: Acc, f: RawFill, qty: number): void {
+  const feeShare = f.fee * (qty / f.qty);
+  // Book the profit for THIS exit at the cost basis as-of now — the running average entry price (incl.
+  // entry fees), NOT the lifetime average (a later add mustn't retroactively re-price an earlier sale).
+  // Summed over exits this is the profit banked so far; at a clean close it equals realizedPnl.
+  const avgEntryPrice = acc.entryQty > 0 ? acc.entryValue / acc.entryQty : 0;
+  const feePerShare = acc.entryQty > 0 ? acc.entryFees / acc.entryQty : 0;
+  acc.realizedSoFar +=
+    acc.direction === "LONG"
+      ? qty * (f.price - (avgEntryPrice + feePerShare)) - feeShare // sold above basis (basis incl. buy fee) = profit
+      : qty * (avgEntryPrice - feePerShare - f.price) - feeShare; // covered below the net short proceeds = profit
   acc.exitQty += qty;
   acc.exitValue += qty * f.price;
-  acc.fees += f.fee * (qty / f.qty);
+  acc.fees += feeShare;
   acc.position += acc.direction === "LONG" ? -qty : qty;
   acc.lastTime = f.time;
   if (!acc.fillIds.includes(f.id)) acc.fillIds.push(f.id);
@@ -103,17 +121,9 @@ function finalize(acc: Acc): Trade {
   const closed = isZero(acc.position);
   const avgEntry = acc.entryQty > 0 ? acc.entryValue / acc.entryQty : 0;
   const avgExit = acc.exitQty > 0 ? acc.exitValue / acc.exitQty : null;
-  // Profit BANKED so far from any exits (partial or full), on an average-cost basis with fees prorated
-  // by the exited fraction — so a still-OPEN runner reports the money already taken off the table, and
-  // at full close this equals realizedPnl exactly. 0 when nothing has been sold yet.
-  const exitedFraction = acc.entryQty > 0 ? acc.exitQty / acc.entryQty : 0;
-  const feesOnExits = acc.fees * exitedFraction;
-  const realizedSoFar =
-    acc.exitQty === 0
-      ? 0
-      : acc.direction === "LONG"
-        ? acc.exitValue - avgEntry * acc.exitQty - feesOnExits
-        : avgEntry * acc.exitQty - acc.exitValue - feesOnExits;
+  // Profit banked so far — accumulated per-exit at the cost basis then (see applyExit), so interleaved
+  // adds never re-price an earlier sale. 0 when nothing has been sold; == realizedPnl at a clean close.
+  const realizedSoFar = acc.realizedSoFar;
   let realizedPnl: number | null = null;
   if (closed) {
     realizedPnl =

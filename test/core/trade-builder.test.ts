@@ -66,14 +66,22 @@ test("realizedSoFar banks the profit from a partial exit while the trade stays O
   expect(t.realizedSoFar).toBeCloseTo(12, 9); // but the profit already taken off the table IS captured
 });
 
-test("realizedSoFar nets fees prorated to the exited fraction", () => {
-  // Buy 10 @ 10 (fee 2), sell 4 @ 13 (fee 1). Fees so far = 3; exited fraction 4/10 → 1.2 of fees.
-  // Banked = 4×(13−10) − 1.2 = 12 − 1.2 = 10.8.
+test("realizedSoFar nets fees: the exit's own fee + the entry fee on the shares sold", () => {
+  // Buy 10 @ 10 (fee 2 → 0.2/share), sell 4 @ 13 (fee 1). Cost basis of the 4 sold = 10 + 0.2 = 10.2.
+  // Banked = 4×(13 − 10.2) − 1 = 11.2 − 1 = 10.2.
   const trades = buildTrades([
     fill("BUY", 10, 10, { fee: 2 }),
     fill("SELL", 4, 13, { fee: 1 }),
   ]);
-  expect(trades[0]!.realizedSoFar).toBeCloseTo(10.8, 9);
+  expect(trades[0]!.realizedSoFar).toBeCloseTo(10.2, 9);
+});
+
+test("realizedSoFar books each exit at the cost basis THEN — a later add can't re-price an earlier sale", () => {
+  // Buy 10 @ 10, sell 4 @ 13 (basis 10 at that moment → banked +12), THEN buy 10 @ 20 (avg rises to 15).
+  // The sale still banked +12; using the final avg (15) would wrongly report 4×(13−15) = −8.
+  const t = buildTrades([fill("BUY", 10, 10), fill("SELL", 4, 13), fill("BUY", 10, 20)])[0]!;
+  expect(t.status).toBe("open"); // position 10 − 4 + 10 = 16
+  expect(t.realizedSoFar).toBeCloseTo(12, 9);
 });
 
 test("realizedSoFar is 0 for an open trade with no exits yet", () => {
