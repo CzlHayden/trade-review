@@ -132,3 +132,10 @@ test("breakeven stop for a short sits above entry (direction via signed qty)", (
   const m = positionMetrics({ avgCost: 100, qty: -10, price: 90, stop: 105, initialRisk: 50, realizedSoFar: 80 });
   expect(m.breakevenStop).toBe(108); // 100 - 80/(-10)
 });
+
+test("breakeven stop with a BANKED LOSS sits above entry — remaining shares must recover the loss", () => {
+  // Long 10 @ 100, but partial exits banked −40. Net breakeven needs (stop-100)*10 = +40 ⇒ stop 104.
+  const m = positionMetrics({ avgCost: 100, qty: 10, price: 105, stop: 95, initialRisk: 50, realizedSoFar: -40 });
+  expect(m.breakevenStop).toBe(104); // 100 - (-40)/10
+  expect(positionMetrics({ avgCost: 100, qty: 10, price: 105, stop: 104, initialRisk: 50, realizedSoFar: -40 }).cushion).toBe(0);
+});

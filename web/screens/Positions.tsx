@@ -111,6 +111,11 @@ function PositionCard({ p, onOpen }: { p: OpenPosition; onOpen?: () => void }) {
   const ccy = p.currency;
   const long = p.qty >= 0;
   const atRisk = p.openRisk !== null && p.openRisk > 0;
+  // Only surface the breakeven stop when it's an ACHIEVABLE protective stop: on the correct side of the
+  // current price (below market for a long, above for a short). Otherwise "put your stop at X" would name
+  // a price the market has already passed — a stop there fills immediately at a loss, not breakeven.
+  const breakevenReachable =
+    p.breakevenStop !== null && p.price !== null && (long ? p.breakevenStop <= p.price : p.breakevenStop >= p.price);
 
   const banked = p.realizedSoFar; // locked from partial exits
   const riding = p.unrealized; // paper P&L on the shares still held (null when no price)
@@ -182,10 +187,10 @@ function PositionCard({ p, onOpen }: { p: OpenPosition; onOpen?: () => void }) {
         )}
       </div>
 
-      {atRisk && p.breakevenStop !== null && (
+      {atRisk && breakevenReachable && (
         <div className="pos-be">
           <span className="pos-be-label">Breakeven stop</span>
-          <span className="pos-be-val">{price(p.breakevenStop, ccy)}</span>
+          <span className="pos-be-val">{price(p.breakevenStop!, ccy)}</span>
         </div>
       )}
     </div>
