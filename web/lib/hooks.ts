@@ -104,13 +104,15 @@ export function useQuit() {
 }
 
 /** Notify-only update check. Slow cadence — a new release doesn't appear mid-session often, and the
- * unauthenticated GitHub API is rate-limited (60/hr). The server also caches for 6h. */
+ * unauthenticated GitHub API is rate-limited (60/hr). The server also caches successful checks for 6h.
+ * A failed check (offline/rate-limited at startup) returns 200 with `error` set, so poll again in a
+ * few minutes rather than sitting on the stale error for 6h — mirrors the server not caching failures. */
 export const useUpdateCheck = () =>
   useQuery({
     queryKey: ["updateCheck"],
     queryFn: api.updateCheck,
     staleTime: 6 * 60 * 60_000,
-    refetchInterval: 6 * 60 * 60_000,
+    refetchInterval: (query) => (query.state.data?.error ? 5 * 60_000 : 6 * 60 * 60_000),
     refetchOnWindowFocus: false,
     retry: false,
   });
