@@ -1,5 +1,6 @@
 import { useLocation } from "wouter";
 import { usePositions } from "../lib/hooks";
+import type { OpenPosition } from "../lib/api";
 import { price, money, pct, qty, rMultiple, signClass } from "../lib/format";
 
 /** Current holdings, grouped per currency. The framing is R-first: "if I'm stopped at my current
@@ -76,73 +77,14 @@ export function Positions() {
               price(g.deployed, g.currency)
             )}
           </div>
-          <div className="table-wrap">
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>Symbol</th>
-                  <th>Side</th>
-                  <th className="right">Qty</th>
-                  <th className="right">Avg → Price</th>
-                  <th className="right">Stop</th>
-                  <th className="right">If stopped</th>
-                  <th className="right">P&amp;L</th>
-                </tr>
-              </thead>
-              <tbody>
-                {g.positions.map((p) => (
-                  <tr
-                    key={`${p.account}|${p.symbol}`}
-                    className={p.tradeId ? "clickable" : ""}
-                    onClick={p.tradeId ? () => navigate(`/trades/${encodeURIComponent(p.tradeId!)}`) : undefined}
-                  >
-                    <td className="mono">{p.symbol}</td>
-                    <td className={p.qty >= 0 ? "pos" : "neg"} style={{ fontWeight: 600, fontSize: 11 }}>
-                      {p.qty >= 0 ? "LONG" : "SHORT"}
-                    </td>
-                    <td className="right num">{qty(Math.abs(p.qty))}</td>
-                    <td className="right num">
-                      {price(p.avgCost, p.currency)}
-                      <span className="faint"> → </span>
-                      {p.price !== null ? price(p.price, p.currency) : <span className="faint">—</span>}
-                    </td>
-                    <td className="right num">
-                      {p.liveStop !== null ? price(p.liveStop, p.currency) : <span className="warn">no stop</span>}
-                    </td>
-                    {/* If stopped now: the TOTAL cushion (banked profit + remaining shares) as signed R,
-                        the $ beneath, the % of account below that, a FREE pill, and — when some profit is
-                        already banked — a note so the cushion isn't mistaken for the remainder alone. */}
-                    <td className="right num">
-                      {p.cushion === null ? (
-                        <span className="faint">—</span>
-                      ) : (
-                        <RCell
-                          r={p.cushionR}
-                          amount={p.cushion}
-                          pct={p.cushionPct}
-                          currency={p.currency}
-                          badge={p.freeTrade ? "FREE" : undefined}
-                          note={p.realizedSoFar !== 0 ? `incl. ${money(p.realizedSoFar, p.currency)} banked` : undefined}
-                        />
-                      )}
-                    </td>
-                    <td className="right num">
-                      {p.totalPnl === null ? (
-                        <span className="faint">—</span>
-                      ) : (
-                        <RCell
-                          r={p.totalPnlR}
-                          amount={p.totalPnl}
-                          pct={p.totalPnlPct}
-                          currency={p.currency}
-                          note={p.realizedSoFar !== 0 ? `${money(p.realizedSoFar, p.currency)} banked + open` : undefined}
-                        />
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="pos-cards">
+            {g.positions.map((p) => (
+              <PositionCard
+                key={`${p.account}|${p.symbol}`}
+                p={p}
+                onOpen={p.tradeId ? () => navigate(`/trades/${encodeURIComponent(p.tradeId!)}`) : undefined}
+              />
+            ))}
           </div>
         </div>
       ))}
@@ -161,24 +103,91 @@ function OmitCaveat({ omitted, label, title }: { omitted: number; label: string;
   );
 }
 
-/** A signed R value (primary) with the dollar amount beneath and, when known, the % of account below
- * that — leading with R, then $, then % (sizing preference). Colored by sign. Optional pill (FREE) and
- * a small `note` (e.g. how much profit is already banked). */
-function RCell({ r, amount, pct: p, currency, badge, note }: { r: number | null; amount: number; pct?: number | null; currency: string; badge?: string; note?: string }) {
-  const cls = signClass(r ?? amount);
+/** One open position as a card: header (symbol · side · qty), avg→price + stop, the whole-trade P&L
+ * ("net now") in $ and R, a banked ▸ riding bar (each piece red when it's a loss), the if-stopped
+ * floor, and — only when still at risk — the stop price that would make the trade net breakeven.
+ * Uniform layout across every state; clicking opens the trade. */
+function PositionCard({ p, onOpen }: { p: OpenPosition; onOpen?: () => void }) {
+  const ccy = p.currency;
+  const long = p.qty >= 0;
+  const atRisk = p.openRisk !== null && p.openRisk > 0;
+
+  const banked = p.realizedSoFar; // locked from partial exits
+  const riding = p.unrealized; // paper P&L on the shares still held (null when no price)
+  const bAbs = Math.abs(banked);
+  const rAbs = riding === null ? 0 : Math.abs(riding);
+  const total = bAbs + rAbs;
+  const bWidth = total > 0 ? (bAbs / total) * 100 : 0;
+  const rWidth = total > 0 ? (rAbs / total) * 100 : 0;
+
   return (
-    <div style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: 1 }}>
-      <span className={cls} style={{ fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
-        {badge && <span className="free-pill">{badge}</span>}
-        {r !== null ? rMultiple(r) : money(amount, currency)}
-      </span>
-      {r !== null && <span className={cls} style={{ fontSize: 12 }}>{money(amount, currency)}</span>}
-      {p !== null && p !== undefined && (
-        <span className={cls} style={{ fontSize: 12 }} title="Share of account equity (this currency)">
-          {pct(p)} of acct
+    <div className={`pos-card card${onOpen ? " clickable" : ""}`} onClick={onOpen}>
+      <div className="pos-card-head">
+        <div>
+          <span className="pos-card-sym">{p.symbol}</span>
+          <span className={`pos-card-side ${long ? "pos" : "neg"}`}>{long ? "LONG" : "SHORT"}</span>
+          <span className="pos-card-qty">{qty(Math.abs(p.qty))}</span>
+        </div>
+        {p.cushion === null ? (
+          <span className="risk-pill">NO STOP</span>
+        ) : p.freeTrade ? (
+          <span className="free-pill">FREE</span>
+        ) : (
+          <span className="risk-pill">AT RISK</span>
+        )}
+      </div>
+
+      <div className="pos-card-sub">
+        <span>
+          {price(p.avgCost, ccy)}
+          <span className="faint"> → </span>
+          {p.price !== null ? price(p.price, ccy) : <span className="faint">—</span>}
         </span>
+        <span>{p.liveStop !== null ? <>stop {price(p.liveStop, ccy)}</> : <span className="warn">no stop</span>}</span>
+      </div>
+
+      <div className="pos-card-net">
+        {p.totalPnl === null ? (
+          <span className="amt faint">—</span>
+        ) : (
+          <>
+            <span className={`amt ${signClass(p.totalPnl)}`}>{money(p.totalPnl, ccy)}</span>
+            <span className={`r ${signClass(p.totalPnl)}`}>{rMultiple(p.totalPnlR)}</span>
+          </>
+        )}
+      </div>
+      {p.totalPnlPct !== null && (
+        <div className="pos-card-acct">{pct(p.totalPnlPct)} of acct</div>
       )}
-      {note && <span className="faint" style={{ fontSize: 11 }}>{note}</span>}
+
+      <div className="pos-bar">
+        {bWidth > 0 && <div className={`pos-bar-seg ${banked >= 0 ? "seg-b-pos" : "seg-b-neg"}`} style={{ width: `${bWidth}%` }} />}
+        {rWidth > 0 && <div className={`pos-bar-seg ${(riding ?? 0) >= 0 ? "seg-r-pos" : "seg-r-neg"}`} style={{ width: `${rWidth}%` }} />}
+      </div>
+      <div className="pos-legend">
+        {banked !== 0 ? <span className={signClass(banked)}>banked {money(banked, ccy)}</span> : <span />}
+        {riding !== null ? <span className={signClass(riding)}>riding {money(riding, ccy)}</span> : <span className="faint">no price</span>}
+      </div>
+
+      <div className="pos-floor">
+        <span className="pos-floor-label">If stopped</span>
+        {p.cushion === null ? (
+          <span className="warn">no stop</span>
+        ) : (
+          <span className="pos-floor-val">
+            <span className={signClass(p.cushion)}>{money(p.cushion, ccy)}</span>
+            <span className={`r ${signClass(p.cushion)}`}>{rMultiple(p.cushionR)}</span>
+            {p.cushionPct !== null && <span className="faint"> · {pct(p.cushionPct)} acct</span>}
+          </span>
+        )}
+      </div>
+
+      {atRisk && p.breakevenStop !== null && (
+        <div className="pos-be">
+          <span className="pos-be-label">Breakeven stop</span>
+          <span className="pos-be-val">{price(p.breakevenStop, ccy)}</span>
+        </div>
+      )}
     </div>
   );
 }

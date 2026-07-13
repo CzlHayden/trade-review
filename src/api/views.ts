@@ -39,6 +39,7 @@ export interface OpenPosition {
   cushionR: number | null; // cushion ÷ initialRisk (signed; ≥ 0 ⇒ free trade)
   totalPnlR: number | null; // totalPnl ÷ initialRisk — "how many R is the whole trade up now"
   freeTrade: boolean; // the cushion locks in ≥ breakeven — no downside left (banked profit included)
+  breakevenStop: number | null; // stop PRICE that brings the cushion to 0 (where to move the stop for net breakeven); null when qty is 0
   // As a fraction of THIS position's account equity (same currency — never mixed), so the row reads
   // "risking 0.4% of the account" (sizing preference: lead with % of account, not raw $). Signed to
   // match its dollar figure: cushionPct is − when at risk / + when locked; null when equity unknown.
@@ -99,6 +100,7 @@ export function openPositions(db: Database, snapshotTime: number): OpenPosition[
       cushionR: m.cushionR,
       totalPnlR: m.totalPnlR,
       freeTrade: m.freeTrade,
+      breakevenStop: m.breakevenStop,
       accountEquity,
       cushionPct: pctOf(m.cushion),
       totalPnlPct: pctOf(m.totalPnl),
