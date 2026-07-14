@@ -31,11 +31,13 @@ const DEFS: FlagDef[] = [
   },
   {
     id: "cut_winner_early",
-    title: "Cut a winner early",
+    title: "Small win (< 1R)",
     category: "exit",
     kind: "behavior",
     defaultSeverity: "info",
-    summary: "You exited a winner for less than 1R.",
+    // Named for the FACT (a sub-1R win), not "cut early" — the trigger has no post-exit check, so it
+    // can't tell a perfect exit near the peak from one you bailed on while it kept running.
+    summary: "You banked a winner for less than 1R.",
     why: "Small wins can't pay for full-size losses — the math needs your winners to run.",
   },
   {

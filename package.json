@@ -1,6 +1,6 @@
 {
   "name": "trade-review",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "module": "src/app.ts",
   "type": "module",
   "private": true,
