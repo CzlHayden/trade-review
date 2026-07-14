@@ -50,6 +50,15 @@ test("resolveTranslocatedExecPath: resolves the real bundle exec path from the n
   );
 });
 
+test("resolveTranslocatedExecPath: a source path containing ' on ' still resolves (anchors on the last delimiter)", () => {
+  const mount =
+    "/Users/me/Apps on Ice/Trade Review.app on /private/var/folders/f4/xyz/T/AppTranslocation/A7B0-3FA2 (nullfs, local, read-only)\n";
+  const exec = "/private/var/folders/f4/xyz/T/AppTranslocation/A7B0-3FA2/d/Trade Review.app/Contents/MacOS/trade-review";
+  expect(resolveTranslocatedExecPath(exec, () => mount)).toBe(
+    "/Users/me/Apps on Ice/Trade Review.app/Contents/MacOS/trade-review",
+  );
+});
+
 test("resolveTranslocatedExecPath: translocated but no matching mount → null (fail safe, don't guess)", () => {
   expect(resolveTranslocatedExecPath(TRANSLOCATED_EXEC, () => "/dev/disk1s1 on / (apfs, local)\n")).toBe(null);
 });

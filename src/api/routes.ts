@@ -403,7 +403,7 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
       // installUpdate does that). Reports "disabled" when no checker is wired (tests). Never throws.
       if (seg.length === 3 && seg[1] === "update" && seg[2] === "check" && method === "GET") {
         if (!deps.checkUpdate) {
-          return json({ current: "", latest: null, updateAvailable: false, downloadUrl: null, releaseUrl: null, canInstall: false, error: "update check unavailable" });
+          return json({ current: "", latest: null, updateAvailable: false, downloadUrl: null, releaseUrl: null, canInstall: false, checksumsUrl: null, error: "update check unavailable" });
         }
         // ?force=1 skips the cache for an on-demand check from Settings.
         return json(await deps.checkUpdate(url.searchParams.get("force") === "1"));

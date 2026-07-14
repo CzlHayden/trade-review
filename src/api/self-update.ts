@@ -70,8 +70,11 @@ export function resolveTranslocatedExecPath(
     // anchor on " on " + the "(nullfs" options rather than splitting on whitespace.
     const optIdx = line.indexOf(" (nullfs");
     if (optIdx < 0) continue;
-    const onIdx = line.indexOf(" on ");
-    if (onIdx < 0 || onIdx >= optIdx) continue;
+    // Anchor on the LAST " on " before the options: the mountpoint never contains " on ", but the
+    // source app path might (e.g. a folder literally named "… on …"), so splitting on the first one
+    // could mis-parse.
+    const onIdx = line.lastIndexOf(" on ", optIdx);
+    if (onIdx < 0) continue;
     const source = line.slice(0, onIdx); // the original bundle
     const mountpoint = line.slice(onIdx + 4, optIdx); // …/AppTranslocation/<uuid>
     if (!execPath.startsWith(mountpoint + "/")) continue;
