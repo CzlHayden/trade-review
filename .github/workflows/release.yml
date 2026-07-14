@@ -77,7 +77,13 @@ jobs:
         # Falls back to `upload --clobber` so re-running the workflow for an existing tag re-attaches
         # the assets instead of failing on "release already exists".
         run: |
-          files=$(find artifacts -type f \( -name '*.exe' -o -name '*.zip' \))
+          # Flatten the per-job artifact subdirs into one place so checksums.txt keys on bare asset
+          # names (what the in-app installer looks up) and every asset uploads from one directory.
+          mkdir -p release
+          find artifacts -type f \( -name '*.exe' -o -name '*.zip' \) -exec cp {} release/ \;
+          ( cd release && sha256sum * > checksums.txt )
+          cat release/checksums.txt
+          files=$(find release -type f)
           gh release create "${{ github.ref_name }}" \
             --repo "${{ github.repository }}" \
             --title "Trade Review ${{ github.ref_name }}" \

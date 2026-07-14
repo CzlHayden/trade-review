@@ -84,8 +84,22 @@ test("buildUpdateStatus flags an available update and picks this platform's down
     downloadUrl: "https://dl/arm64.zip",
     releaseUrl: "https://rel",
     canInstall: false, // installSupported defaults to false
+    checksumsUrl: null, // no checksums.txt asset in this release
     error: null,
   });
+});
+
+test("buildUpdateStatus: checksumsUrl points at a checksums.txt asset when the release ships one", () => {
+  const release = {
+    version: "0.7.0",
+    releaseUrl: "https://rel",
+    assets: [
+      { name: "trade-review-macos-arm64.zip", url: "https://github.com/o/r/releases/download/v0.7.0/trade-review-macos-arm64.zip" },
+      { name: "checksums.txt", url: "https://github.com/o/r/releases/download/v0.7.0/checksums.txt" },
+    ],
+  };
+  const s = buildUpdateStatus("0.6.0", release, "darwin", "arm64", null, true);
+  expect(s.checksumsUrl).toBe("https://github.com/o/r/releases/download/v0.7.0/checksums.txt");
 });
 
 test("buildUpdateStatus: canInstall only when installSupported AND an asset exists for this platform", () => {
@@ -123,6 +137,7 @@ test("buildUpdateStatus surfaces a failed check without claiming an update", () 
     downloadUrl: null,
     releaseUrl: null,
     canInstall: false,
+    checksumsUrl: null,
     error: "network error",
   });
 });

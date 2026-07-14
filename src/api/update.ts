@@ -17,6 +17,7 @@ export interface UpdateStatus {
   downloadUrl: string | null; // the asset for the caller's platform, when one exists
   releaseUrl: string | null;
   canInstall: boolean; // true → the app can update itself in place (see self-update.ts); else the UI links to the download
+  checksumsUrl: string | null; // the release's checksums.txt asset, when present — the installer verifies SHA-256 against it
   error: string | null; // set when the check couldn't complete (offline, rate-limited, malformed)
 }
 
@@ -82,12 +83,15 @@ export function buildUpdateStatus(
   installSupported = false, // set by the caller when running the compiled binary on a self-update platform
 ): UpdateStatus {
   if (release === null) {
-    return { current, latest: null, updateAvailable: false, downloadUrl: null, releaseUrl: null, canInstall: false, error };
+    return { current, latest: null, updateAvailable: false, downloadUrl: null, releaseUrl: null, canInstall: false, checksumsUrl: null, error };
   }
   const updateAvailable = compareVersions(release.version, current) > 0;
   const wantName = expectedAssetName(platform, arch);
   const asset = wantName ? release.assets.find((a) => a.name === wantName) : undefined;
   const downloadUrl = asset?.url ?? null;
+  // The installer verifies the download against this when present; releases predating it are still
+  // installable (degraded to a header/size sanity check).
+  const checksumsUrl = release.assets.find((a) => a.name === "checksums.txt")?.url ?? null;
   return {
     current,
     latest: release.version,
@@ -97,6 +101,7 @@ export function buildUpdateStatus(
     // In-place update needs the compiled binary, a supported platform, AND an asset to fetch. Without
     // a download the UI falls back to the release page link.
     canInstall: installSupported && downloadUrl !== null,
+    checksumsUrl,
     error: null,
   };
 }

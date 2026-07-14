@@ -16,7 +16,7 @@ import { Mutex } from "./api/mutex";
 import { runSync, rebuildDerived, type SyncResult } from "./sync/sync";
 import { connectFutu } from "./futu/client";
 import { checkForUpdate, type UpdateStatus } from "./api/update";
-import { performInstall, consumeSilentRelaunchMarker } from "./api/self-update";
+import { performInstall, consumeSilentRelaunchMarker, sweepUpdateArtifacts } from "./api/self-update";
 import pkg from "../package.json";
 // Bun fullstack HTML import: Bun bundles the referenced React/TS/CSS in dev (with HMR) and EMBEDS the
 // built assets under `bun build --compile`. This is what replaces a separate Vite toolchain.
@@ -126,12 +126,13 @@ export async function main(): Promise<void> {
   // marker below). Returns the install result to the caller; only shuts down when it actually started.
   const reopenMarker = join(dataDir(), ".reopen-silent");
   const installUpdate = async (): Promise<{ ok: boolean; error?: string }> => {
-    const status = await checkUpdate();
+    const status = await checkUpdate(true); // force a fresh check so we never install a superseded "latest"
     const result = await performInstall({
       status,
       platform: process.platform,
       execPath: process.execPath,
       pid: process.pid,
+      port: Number(process.env.PORT ?? defaultPort),
       marker: reopenMarker,
       compiled,
     });
@@ -140,16 +141,54 @@ export async function main(): Promise<void> {
   };
   const api = buildApi(db, { candles, config, sync, now: Date.now, rebuildLock, quit, checkUpdate, installUpdate, appVersion });
 
+  // In the compiled binary we serve the bundled SPA ourselves so we control cache headers. Bun's HTML
+  // route emits only an ETag (no Cache-Control — see oven-sh/bun#19198), which lets a browser pin a
+  // STALE index.html that points at hashed chunk names a newer build no longer has → the chunk 404s →
+  // React never mounts → blank screen. Fix: hashed chunks are content-addressed so they're immutable
+  // (cache forever); index.html must always revalidate (no-cache) so a reload always lands the current
+  // chunk names. Bun.embeddedFiles holds the built assets (chunk-*.js/.css + index-*.html); it's empty
+  // when running from source, where we keep Bun's `index` route for HMR instead.
+  const spaAssets = new Map<string, Blob>();
+  let spaIndexHtml: Blob | null = null;
+  for (const f of Bun.embeddedFiles) {
+    const blob = f as unknown as Blob & { name: string };
+    if (blob.name.endsWith(".html")) spaIndexHtml = blob;
+    else spaAssets.set("/" + blob.name, blob);
+  }
+  const serveSpa = (req: Request): Response => {
+    const pathname = new URL(req.url).pathname;
+    const asset = spaAssets.get(pathname);
+    if (asset) {
+      return new Response(asset, {
+        headers: { "content-type": asset.type, "cache-control": "public, max-age=31536000, immutable" },
+      });
+    }
+    // A missing file-looking path (has an extension) is a real 404 — don't hand back HTML for a .js.
+    if (/\.[a-z0-9]+$/i.test(pathname.split("/").pop() ?? "")) return new Response("not found", { status: 404 });
+    // Otherwise this is a SPA route: return the document, which must always revalidate so the browser
+    // never runs a stale index.html against a newer build's chunks.
+    if (spaIndexHtml) {
+      return new Response(spaIndexHtml, {
+        headers: { "content-type": "text/html;charset=utf-8", "cache-control": "no-cache" },
+      });
+    }
+    return new Response("not found", { status: 404 });
+  };
+
   const server = Bun.serve({
     hostname: "127.0.0.1", // localhost bind is the entire security model (single local user)
     port: Number(process.env.PORT ?? defaultPort),
-    development: process.env.NODE_ENV !== "production", // HMR + rich errors for `bun run`; off in the binary
+    // Dev mode (HMR + rich errors) only when running from source; the compiled binary serves the SPA
+    // via serveSpa above (Bun would otherwise run the binary in dev mode, since NODE_ENV isn't
+    // "production" there). NODE_ENV can still force production for a source run.
+    development: runningFromSource && process.env.NODE_ENV !== "production",
     routes: {
-      // Most-specific first: API paths hit the JSON handler; everything else serves the bundled SPA
-      // (index.html), which is the SPA's own history-mode fallback.
+      // Most-specific first: API paths hit the JSON handler; everything else serves the bundled SPA.
+      // From source we hand the SPA (+ HMR) to Bun's `index`; the compiled binary uses serveSpa so it
+      // controls cache headers (Bun emits none — a stale index.html would blank the screen).
       "/api/*": (req) => api(req),
       "/api": (req) => api(req),
-      "/*": index,
+      "/*": runningFromSource ? index : serveSpa,
     },
   });
 
@@ -160,6 +199,9 @@ export async function main(): Promise<void> {
   // version, so a second tab would be noise.
   const silentRelaunch = consumeSilentRelaunchMarker(reopenMarker);
   if (process.env.NO_OPEN !== "1" && !silentRelaunch) openBrowser(openUrl);
+  // Reaching here means this build launched cleanly, so a prior update's Windows rollback copy
+  // (`<exe>.old`) is no longer needed — remove it best-effort.
+  sweepUpdateArtifacts(process.platform, process.execPath);
 }
 
 if (import.meta.main) void main();

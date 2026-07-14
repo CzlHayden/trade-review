@@ -96,7 +96,14 @@ export function UpdateBanner() {
           <button className="btn btn-primary btn-sm" onClick={install}>
             {phase === "error" ? "Retry" : "Update & Restart"}
           </button>
-          {data.releaseUrl && (
+          {/* If the in-place update failed (e.g. a non-writable install dir, or a translocated app),
+              always leave a manual escape hatch to the download so the user isn't stuck. */}
+          {phase === "error" && downloadHref && (
+            <a className="update-banner-link" href={downloadHref} target="_blank" rel="noopener noreferrer">
+              Download manually
+            </a>
+          )}
+          {phase !== "error" && data.releaseUrl && (
             <a className="update-banner-link" href={data.releaseUrl} target="_blank" rel="noopener noreferrer">
               What's new
             </a>
