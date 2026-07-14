@@ -61,9 +61,12 @@ export function Kpis({ stats }: { stats: CurrencyStats[] }) {
             />
             {(s.avgMae !== null || s.avgMfe !== null) && (
               <Kpi
+                // MAE is the worst ADVERSE excursion — render it negative/red so it can't read as a
+                // gain (money() would prefix "+"). Both are price points PER SHARE, not position $.
                 label="Avg MAE / MFE"
-                value={s.avgMae !== null ? money(s.avgMae, s.currency) : "—"}
-                sub={`MFE ${s.avgMfe !== null ? money(s.avgMfe, s.currency) : "—"}`}
+                value={s.avgMae !== null ? money(-s.avgMae, s.currency) : "—"}
+                cls={s.avgMae !== null ? signClass(-s.avgMae) : undefined}
+                sub={`per share · MFE ${s.avgMfe !== null ? money(s.avgMfe, s.currency) : "—"}`}
               />
             )}
           </div>

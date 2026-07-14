@@ -14,7 +14,7 @@ const COLS: Array<{ key: SortKey | null; label: string; right?: boolean }> = [
   { key: "holdSeconds", label: "Hold", right: true },
   { key: null, label: "Entry → Exit", right: true },
   { key: "sizePct", label: "Size %", right: true },
-  { key: "realizedPnl", label: "P&L", right: true },
+  { key: "realizedPnl", label: "Realized P&L", right: true },
   { key: "rMultiple", label: "R", right: true },
   { key: null, label: "Flags" },
 ];

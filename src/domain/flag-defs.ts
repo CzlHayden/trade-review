@@ -98,7 +98,7 @@ const DEFS: FlagDef[] = [
     category: "sizing",
     kind: "behavior",
     defaultSeverity: "info",
-    summary: "You added in increasing size, or well past your initial buy point.",
+    summary: "You added a tranche bigger than your first entry, or well past your initial buy point.",
     why: "Sound pyramiding adds smaller and only near the entry — not bigger and higher.",
   },
   {

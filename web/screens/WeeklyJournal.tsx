@@ -132,7 +132,12 @@ function WeekBody({ isoWeek }: { isoWeek: string }) {
               <tr>
                 <th>Symbol</th>
                 <th>Closed</th>
-                <th className="right">P&L</th>
+                <th
+                  className="right"
+                  title="The trade's full realized P&L at close — not P&L earned in this week. The list includes trades opened OR closed this week, so a trade closed this week may have run over prior weeks; open trades show —."
+                >
+                  Realized P&L
+                </th>
                 <th className="right">R</th>
               </tr>
             </thead>

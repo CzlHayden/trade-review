@@ -160,7 +160,9 @@ export function evaluate(trade: Trade, ctx: RuleContext, config: RuleConfig): Fl
     add(
       "excess_loss",
       "warn",
-      `Loss reached ${trade.rMultiple.toFixed(2)}R — deeper than your planned 1R.`,
+      // The line is the configured excess-loss threshold (default 1.3R), not a flat 1R — say so, or
+      // a −1.2R loss looks like it should have flagged when it deliberately doesn't.
+      `Loss reached ${trade.rMultiple.toFixed(2)}R — past your ${config.excessLossR}R excess-loss line (planned risk is 1R).`,
     );
   }
 
