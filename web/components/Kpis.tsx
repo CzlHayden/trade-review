@@ -21,7 +21,14 @@ export function Kpis({ stats }: { stats: CurrencyStats[] }) {
               cls={signClass(s.expectancy)}
               sub="per trade"
             />
-            <Kpi label="Avg R" value={rMultiple(s.avgR)} cls={signClass(s.avgR)} />
+            <Kpi
+              label="Avg R"
+              value={rMultiple(s.avgR)}
+              cls={signClass(s.avgR)}
+              // Avg R only covers trades with a known stop (an R basis). Disclose the population when
+              // it's smaller than the closed-trade count, so it doesn't read as over all trades.
+              sub={s.rCount < s.tradeCount ? `${s.rCount} of ${s.tradeCount} with a stop` : undefined}
+            />
             <Kpi
               label="Avg win / loss"
               value={`${money(s.avgWin, s.currency)}`}
