@@ -126,6 +126,7 @@ export interface UpdateStatus {
   downloadUrl: string | null;
   releaseUrl: string | null;
   canInstall: boolean;
+  checksumsUrl: string | null;
   error: string | null;
 }
 

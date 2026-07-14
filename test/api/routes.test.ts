@@ -587,7 +587,7 @@ test("POST /api/quit rejects a cross-site (drive-by) request without shutting do
 test("GET /api/update/check returns the injected checker's status", async () => {
   const db = new Database(":memory:");
   runMigrations(db);
-  const status = { current: "0.6.0", latest: "0.7.0", updateAvailable: true, downloadUrl: "https://dl", releaseUrl: "https://rel", canInstall: false, error: null };
+  const status = { current: "0.6.0", latest: "0.7.0", updateAvailable: true, downloadUrl: "https://dl", releaseUrl: "https://rel", canInstall: false, checksumsUrl: null, error: null };
   const app = buildApi(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 0, checkUpdate: async () => status });
   const body: any = await (await app(new Request("http://127.0.0.1:8123/api/update/check"))).json();
   expect(body).toEqual(status);
@@ -597,7 +597,7 @@ test("GET /api/update/check?force=1 forwards force to the checker (Settings 'Che
   const db = new Database(":memory:");
   runMigrations(db);
   const seen: boolean[] = [];
-  const status = { current: "0.1.3", latest: "0.1.4", updateAvailable: true, downloadUrl: "https://dl", releaseUrl: "https://rel", canInstall: true, error: null };
+  const status = { current: "0.1.3", latest: "0.1.4", updateAvailable: true, downloadUrl: "https://dl", releaseUrl: "https://rel", canInstall: true, checksumsUrl: null, error: null };
   const app = buildApi(db, {
     candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 0,
     checkUpdate: async (force) => { seen.push(force === true); return status; },
