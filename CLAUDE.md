@@ -36,17 +36,25 @@ bun run src/app.ts        # backup + migrate DB → serve http://127.0.0.1:8124 
 - Default branch is **`main`** (never `master`).
 - **Every checkpoint ships as a PR.** Feature branch → PR → review → merge. Never
   commit straight to `main`.
-- A PR is mergeable only when **all four gates are green**:
+- A PR is mergeable only when **the two hard gates are green**:
   1. `bun test` — all tests pass
   2. `bunx tsc --noEmit` — no type errors
-  3. **Codex review is clean** (no must-fix findings) — see below
-  4. Fable review is clean (adversarial second opinion, via the Agent tool `model: 'fable'`)
-- Once the gates are green, **merge it yourself — don't ask.** Use
-  `gh pr merge <n> --merge --delete-branch`, then sync local `main`.
+- **AI review is a judgement call, not a blanket gate — use it wisely, not on everything:**
+  - **Codex** (code review) — run it for **non-trivial or risky** changes (money math, sync,
+    migrations, the binary/update path, anything with real failure modes). **Skip it** for small,
+    low-risk, or mechanical changes (copy tweaks, doc/comment edits, obvious refactors). When you run
+    it, must-fix findings block the merge.
+  - **Fable** (adversarial second opinion, via the Agent tool `model: 'fable'`) — reserve for
+    **genuinely complex** work where an independent perspective earns its keep (subtle algorithms,
+    concurrency, tricky trade reconstruction). Not a routine second reviewer; don't pair it with Codex
+    by default.
+- Once the gates are green (and any review you chose to run is clean), **merge it yourself — don't
+  ask.** Use `gh pr merge <n> --merge --delete-branch`, then sync local `main`.
 
 ## Reviewing a PR with Codex
 
-Codex (`gpt-5.5`) is the primary automated reviewer. It runs non-interactively:
+Codex (`gpt-5.5`) is the automated reviewer for changes that warrant one (see above). It runs
+non-interactively:
 
 ```bash
 # review the current branch's changes against main

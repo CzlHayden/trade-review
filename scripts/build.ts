@@ -80,11 +80,6 @@ function makeMacApp(appParent: string, binaryPath: string): string {
   <key>CFBundleExecutable</key><string>${exeName}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>${hasIcon ? `\n  <key>CFBundleIconFile</key><string>AppIcon</string>` : ""}
-  <!-- Agent app: Trade Review is a local server whose UI is the browser it opens. Without this it's a
-       plain CLI wrapped in a .app, so macOS shows the "launching" Dock bounce forever (it never opens a
-       native window to check in). LSUIElement makes it a background agent — no endless bounce, no Dock
-       icon; quit it from the power button in the web UI. -->
-  <key>LSUIElement</key><true/>
 </dict>
 </plist>
 `;
