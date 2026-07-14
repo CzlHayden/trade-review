@@ -110,12 +110,24 @@ export function useQuit() {
 export const useUpdateCheck = () =>
   useQuery({
     queryKey: ["updateCheck"],
-    queryFn: api.updateCheck,
+    // Wrap so TanStack's QueryFunctionContext isn't passed as `force` (which would bypass the cache
+    // on every background poll and burn the 60/hr GitHub rate limit).
+    queryFn: () => api.updateCheck(),
     staleTime: 6 * 60 * 60_000,
     refetchInterval: (query) => (query.state.data?.error ? 5 * 60_000 : 6 * 60 * 60_000),
     refetchOnWindowFocus: false,
     retry: false,
   });
+
+/** On-demand "Check for updates" (Settings button): forces a fresh check past the 6h cache and writes
+ * the result into the shared updateCheck cache, so the top-of-app banner reflects it immediately. */
+export const useCheckForUpdatesNow = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.updateCheck(true),
+    onSuccess: (data) => qc.setQueryData(["updateCheck"], data),
+  });
+};
 
 export const useOpendSettings = () =>
   useQuery({ queryKey: ["opendSettings"], queryFn: api.opendSettings });

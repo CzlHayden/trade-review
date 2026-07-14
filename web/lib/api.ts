@@ -166,7 +166,8 @@ export const api = {
   syncStatus: () => get<SyncStatus>("/api/sync/status"),
   startSync: () => send<SyncStatus>("/api/sync", "POST"),
   quit: () => send<{ quitting: boolean }>("/api/quit", "POST"),
-  updateCheck: () => get<UpdateStatus>("/api/update/check"),
+  // `force` bypasses the server's 6h cache — used by the Settings "Check for updates" button.
+  updateCheck: (force = false) => get<UpdateStatus>(`/api/update/check${force ? "?force=1" : ""}`),
   installUpdate: () => send<{ installing: boolean }>("/api/update/install", "POST"),
   version: () => get<{ version: string }>("/api/version"),
   opendSettings: () => get<OpendSettings>("/api/settings/opend"),
