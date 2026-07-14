@@ -45,6 +45,12 @@ export function rMultiple(r: number | null): string {
   return `${sign}${Math.abs(r).toFixed(2)}R`;
 }
 
+/** A bare ratio, e.g. 4.0× / 0.8×, or "—" when undefined. */
+export function ratio(value: number | null): string {
+  if (value === null) return "—";
+  return `${value.toFixed(1)}×`;
+}
+
 export function qty(value: number): string {
   return value.toLocaleString("en-US", { maximumFractionDigits: 4 });
 }
