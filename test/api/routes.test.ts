@@ -593,6 +593,20 @@ test("GET /api/update/check returns the injected checker's status", async () => 
   expect(body).toEqual(status);
 });
 
+test("GET /api/update/check?force=1 forwards force to the checker (Settings 'Check now')", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  const seen: boolean[] = [];
+  const status = { current: "0.1.3", latest: "0.1.4", updateAvailable: true, downloadUrl: "https://dl", releaseUrl: "https://rel", canInstall: true, error: null };
+  const app = buildApi(db, {
+    candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 0,
+    checkUpdate: async (force) => { seen.push(force === true); return status; },
+  });
+  await app(new Request("http://127.0.0.1:8123/api/update/check"));
+  await app(new Request("http://127.0.0.1:8123/api/update/check?force=1"));
+  expect(seen).toEqual([false, true]); // no param → cached path; ?force=1 → forced
+});
+
 test("GET /api/update/check reports disabled when no checker is wired", async () => {
   const { app } = await api(); // no checkUpdate dep
   const body: any = await (await app(new Request("http://127.0.0.1:8123/api/update/check"))).json();

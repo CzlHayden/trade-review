@@ -60,8 +60,9 @@ export interface ApiDeps {
    * this; tests and any embedded use leave it undefined, so POST /api/quit 503s there. */
   quit?: () => void;
   /** Check GitHub Releases for a newer version (never touches the binary — that's installUpdate).
+   * `force` bypasses the server-side cache (the Settings "Check for updates" button passes it).
    * Injected so tests don't hit the network; when absent, GET /api/update/check reports it disabled. */
-  checkUpdate?: () => Promise<UpdateStatus>;
+  checkUpdate?: (force?: boolean) => Promise<UpdateStatus>;
   /** Perform the in-place update: download the new build, swap the app/exe, relaunch. Resolves after
    * the swap is handed off to a detached helper; the real server then shuts down so the swap can run.
    * Absent in tests/embedded → POST /api/update/install 503s. */
@@ -404,7 +405,8 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
         if (!deps.checkUpdate) {
           return json({ current: "", latest: null, updateAvailable: false, downloadUrl: null, releaseUrl: null, canInstall: false, error: "update check unavailable" });
         }
-        return json(await deps.checkUpdate());
+        // ?force=1 skips the cache for an on-demand check from Settings.
+        return json(await deps.checkUpdate(url.searchParams.get("force") === "1"));
       }
 
       // POST /api/update/install — download the new build, swap the running app/exe, and relaunch.

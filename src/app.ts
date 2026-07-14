@@ -110,9 +110,11 @@ export async function main(): Promise<void> {
   const compiled = !runningFromSource;
   const installSupported = compiled && (process.platform === "darwin" || process.platform === "win32");
   let updateCache: { at: number; status: UpdateStatus } | null = null;
-  const checkUpdate = async (): Promise<UpdateStatus> => {
+  // `force` skips the cache — the Settings "Check for updates" button uses it so a user doesn't wait
+  // out the 6h TTL to see a release that landed after the app started.
+  const checkUpdate = async (force = false): Promise<UpdateStatus> => {
     const nowMs = Date.now();
-    if (updateCache && !updateCache.status.error && nowMs - updateCache.at < UPDATE_TTL_MS) {
+    if (!force && updateCache && !updateCache.status.error && nowMs - updateCache.at < UPDATE_TTL_MS) {
       return updateCache.status;
     }
     const status = await checkForUpdate({ current: appVersion, platform: process.platform, arch: process.arch, repo: REPO, installSupported });

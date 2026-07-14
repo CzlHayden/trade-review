@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useOpendSettings, usePutOpendSettings } from "../lib/hooks";
+import { useOpendSettings, usePutOpendSettings, useCheckForUpdatesNow } from "../lib/hooks";
 import { DEFAULT_OPEND_PORT } from "../lib/constants";
 
 /** OpenD connection settings — where a non-technical user points the app at their local OpenD gateway
@@ -9,6 +9,7 @@ import { DEFAULT_OPEND_PORT } from "../lib/constants";
 export function Settings() {
   const { data, isLoading } = useOpendSettings();
   const save = usePutOpendSettings();
+  const check = useCheckForUpdatesNow();
   const [port, setPort] = useState(String(DEFAULT_OPEND_PORT));
   const [key, setKey] = useState("");
   const [seeded, setSeeded] = useState(false);
@@ -87,6 +88,40 @@ export function Settings() {
           {save.isError && (
             <span className="neg" style={{ fontSize: 13 }}>
               {save.error instanceof Error ? save.error.message : "Save failed."}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 16 }}>
+        <div>
+          <h2 style={{ margin: "0 0 4px", fontSize: 15 }}>Updates</h2>
+          <p className="muted" style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>
+            Trade Review updates itself in place — no re-download. It checks in the background, but you
+            can check now. When a newer version exists, an <strong>Update &amp; Restart</strong> banner
+            appears at the top of the app.
+          </p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <button className="btn" onClick={() => check.mutate()} disabled={check.isPending}>
+            {check.isPending ? "Checking…" : "Check for updates"}
+          </button>
+          {check.isSuccess && check.data.error && (
+            <span className="neg" style={{ fontSize: 13 }}>Couldn't check: {check.data.error}</span>
+          )}
+          {check.isSuccess && !check.data.error && check.data.updateAvailable && (
+            <span className="pos" style={{ fontSize: 13 }}>
+              Version {check.data.latest} is available — use the banner at the top to update.
+            </span>
+          )}
+          {check.isSuccess && !check.data.error && !check.data.updateAvailable && (
+            <span className="faint" style={{ fontSize: 13 }}>
+              You're up to date{check.data.current ? ` (v${check.data.current})` : ""}.
+            </span>
+          )}
+          {check.isError && (
+            <span className="neg" style={{ fontSize: 13 }}>
+              {check.error instanceof Error ? check.error.message : "Check failed."}
             </span>
           )}
         </div>
