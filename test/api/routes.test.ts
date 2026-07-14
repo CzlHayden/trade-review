@@ -587,7 +587,7 @@ test("POST /api/quit rejects a cross-site (drive-by) request without shutting do
 test("GET /api/update/check returns the injected checker's status", async () => {
   const db = new Database(":memory:");
   runMigrations(db);
-  const status = { current: "0.6.0", latest: "0.7.0", updateAvailable: true, downloadUrl: "https://dl", releaseUrl: "https://rel", error: null };
+  const status = { current: "0.6.0", latest: "0.7.0", updateAvailable: true, downloadUrl: "https://dl", releaseUrl: "https://rel", canInstall: false, error: null };
   const app = buildApi(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 0, checkUpdate: async () => status });
   const body: any = await (await app(new Request("http://127.0.0.1:8123/api/update/check"))).json();
   expect(body).toEqual(status);
@@ -597,7 +597,91 @@ test("GET /api/update/check reports disabled when no checker is wired", async ()
   const { app } = await api(); // no checkUpdate dep
   const body: any = await (await app(new Request("http://127.0.0.1:8123/api/update/check"))).json();
   expect(body.updateAvailable).toBe(false);
+  expect(body.canInstall).toBe(false);
   expect(body.error).toBe("update check unavailable");
+});
+
+function sameOriginInstall(): Request {
+  return new Request("http://127.0.0.1:8123/api/update/install", {
+    method: "POST",
+    headers: { "sec-fetch-site": "same-origin" },
+  });
+}
+
+test("POST /api/update/install invokes the installer and 202s on success", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  let installs = 0;
+  const app = buildApi(db, {
+    candles: noCandles,
+    config: DEFAULT_RULE_CONFIG,
+    sync: null,
+    now: () => 0,
+    installUpdate: async () => {
+      installs += 1;
+      return { ok: true };
+    },
+  });
+  const res = await app(sameOriginInstall());
+  expect(res.status).toBe(202);
+  expect(((await res.json()) as any).installing).toBe(true);
+  expect(installs).toBe(1);
+});
+
+test("POST /api/update/install 500s (and stays running) when the installer fails", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  const app = buildApi(db, {
+    candles: noCandles,
+    config: DEFAULT_RULE_CONFIG,
+    sync: null,
+    now: () => 0,
+    installUpdate: async () => ({ ok: false, error: "download failed: GitHub returned 404" }),
+  });
+  const res = await app(sameOriginInstall());
+  expect(res.status).toBe(500);
+  expect(((await res.json()) as any).error).toContain("download failed");
+});
+
+test("POST /api/update/install 503s when no installer is wired", async () => {
+  const { app } = await api(); // no installUpdate dep
+  const res = await app(sameOriginInstall());
+  expect(res.status).toBe(503);
+});
+
+test("POST /api/update/install rejects a cross-site request without installing", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  let installs = 0;
+  const app = buildApi(db, {
+    candles: noCandles,
+    config: DEFAULT_RULE_CONFIG,
+    sync: null,
+    now: () => 0,
+    installUpdate: async () => {
+      installs += 1;
+      return { ok: true };
+    },
+  });
+  const res = await app(
+    new Request("http://127.0.0.1:8123/api/update/install", {
+      method: "POST",
+      headers: { "sec-fetch-site": "cross-site" },
+    }),
+  );
+  expect(res.status).toBe(403);
+  expect(installs).toBe(0);
+});
+
+test("GET /api/version reports the wired app version (and 'unknown' when absent)", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  const withVersion = buildApi(db, { candles: noCandles, config: DEFAULT_RULE_CONFIG, sync: null, now: () => 0, appVersion: "0.1.2" });
+  const a: any = await (await withVersion(new Request("http://127.0.0.1:8123/api/version"))).json();
+  expect(a.version).toBe("0.1.2");
+  const { app } = await api(); // no appVersion dep
+  const b: any = await (await app(new Request("http://127.0.0.1:8123/api/version"))).json();
+  expect(b.version).toBe("unknown");
 });
 
 test("GET /api/settings/opend reports default port + no key on a fresh DB", async () => {

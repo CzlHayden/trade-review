@@ -83,8 +83,23 @@ test("buildUpdateStatus flags an available update and picks this platform's down
     updateAvailable: true,
     downloadUrl: "https://dl/arm64.zip",
     releaseUrl: "https://rel",
+    canInstall: false, // installSupported defaults to false
     error: null,
   });
+});
+
+test("buildUpdateStatus: canInstall only when installSupported AND an asset exists for this platform", () => {
+  const withAsset = {
+    version: "0.7.0",
+    releaseUrl: "https://rel",
+    assets: [{ name: "trade-review-macos-arm64.zip", url: "https://dl/arm64.zip" }],
+  };
+  // installSupported + matching asset → true
+  expect(buildUpdateStatus("0.6.0", withAsset, "darwin", "arm64", null, true).canInstall).toBe(true);
+  // installSupported but NO asset for this platform → false (nothing to download)
+  expect(buildUpdateStatus("0.6.0", withAsset, "linux", "x64", null, true).canInstall).toBe(false);
+  // asset present but not a self-update platform/build → false (falls back to a download link)
+  expect(buildUpdateStatus("0.6.0", withAsset, "darwin", "arm64", null, false).canInstall).toBe(false);
 });
 
 test("buildUpdateStatus: same version → no update; downloadUrl null when this platform's asset is absent", () => {
@@ -107,6 +122,7 @@ test("buildUpdateStatus surfaces a failed check without claiming an update", () 
     updateAvailable: false,
     downloadUrl: null,
     releaseUrl: null,
+    canInstall: false,
     error: "network error",
   });
 });

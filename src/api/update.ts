@@ -1,7 +1,8 @@
 // Update check: ask the GitHub Releases API for the latest published release and compare it to the
-// running version. This is NOTIFY-ONLY — it never touches the running binary. The UI surfaces a
-// banner with a download link; the user installs the new build themselves (see README). Pure helpers
-// are unit-tested; the one I/O function takes an injected fetcher so it's testable offline.
+// running version. This module is the check only — it never touches the running binary; the actual
+// in-place install lives in self-update.ts. The UI surfaces a banner and, when `canInstall` is true
+// (compiled binary on a supported platform with an asset for it), an "Update & Restart" button. Pure
+// helpers are unit-tested; the one I/O function takes an injected fetcher so it's testable offline.
 
 export interface ReleaseInfo {
   version: string; // tag without a leading "v"
@@ -15,6 +16,7 @@ export interface UpdateStatus {
   updateAvailable: boolean;
   downloadUrl: string | null; // the asset for the caller's platform, when one exists
   releaseUrl: string | null;
+  canInstall: boolean; // true → the app can update itself in place (see self-update.ts); else the UI links to the download
   error: string | null; // set when the check couldn't complete (offline, rate-limited, malformed)
 }
 
@@ -77,19 +79,24 @@ export function buildUpdateStatus(
   platform: string,
   arch: string,
   error: string | null = null,
+  installSupported = false, // set by the caller when running the compiled binary on a self-update platform
 ): UpdateStatus {
   if (release === null) {
-    return { current, latest: null, updateAvailable: false, downloadUrl: null, releaseUrl: null, error };
+    return { current, latest: null, updateAvailable: false, downloadUrl: null, releaseUrl: null, canInstall: false, error };
   }
   const updateAvailable = compareVersions(release.version, current) > 0;
   const wantName = expectedAssetName(platform, arch);
   const asset = wantName ? release.assets.find((a) => a.name === wantName) : undefined;
+  const downloadUrl = asset?.url ?? null;
   return {
     current,
     latest: release.version,
     updateAvailable,
-    downloadUrl: asset?.url ?? null,
+    downloadUrl,
     releaseUrl: release.releaseUrl || null,
+    // In-place update needs the compiled binary, a supported platform, AND an asset to fetch. Without
+    // a download the UI falls back to the release page link.
+    canInstall: installSupported && downloadUrl !== null,
     error: null,
   };
 }
@@ -105,9 +112,11 @@ export async function checkForUpdate(opts: {
   platform: string;
   arch: string;
   repo: string; // "owner/name"
+  installSupported?: boolean; // compiled binary on a self-update platform → sets canInstall
   fetchImpl?: FetchLike;
 }): Promise<UpdateStatus> {
   const { current, platform, arch, repo } = opts;
+  const installSupported = opts.installSupported ?? false;
   const doFetch: FetchLike = opts.fetchImpl ?? fetch;
   try {
     const res = await doFetch(`https://api.github.com/repos/${repo}/releases/latest`, {
@@ -121,7 +130,7 @@ export async function checkForUpdate(opts: {
     if (release === null) {
       return buildUpdateStatus(current, null, platform, arch, "unexpected release payload");
     }
-    return buildUpdateStatus(current, release, platform, arch);
+    return buildUpdateStatus(current, release, platform, arch, null, installSupported);
   } catch (e) {
     return buildUpdateStatus(current, null, platform, arch, e instanceof Error ? e.message : String(e));
   }

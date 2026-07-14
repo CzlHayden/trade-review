@@ -59,9 +59,16 @@ export interface ApiDeps {
   /** Gracefully shut the app down (stop the server + exit the process). Only the real server wires
    * this; tests and any embedded use leave it undefined, so POST /api/quit 503s there. */
   quit?: () => void;
-  /** Check GitHub Releases for a newer version (notify-only; never touches the binary). Injected so
-   * tests don't hit the network; when absent, GET /api/update/check reports the feature disabled. */
+  /** Check GitHub Releases for a newer version (never touches the binary — that's installUpdate).
+   * Injected so tests don't hit the network; when absent, GET /api/update/check reports it disabled. */
   checkUpdate?: () => Promise<UpdateStatus>;
+  /** Perform the in-place update: download the new build, swap the app/exe, relaunch. Resolves after
+   * the swap is handed off to a detached helper; the real server then shuts down so the swap can run.
+   * Absent in tests/embedded → POST /api/update/install 503s. */
+  installUpdate?: () => Promise<{ ok: boolean; error?: string }>;
+  /** The running app version, served cheaply at GET /api/version so the UI can poll for the relaunched
+   * server after an in-place update. Absent → the endpoint reports "unknown". */
+  appVersion?: string;
   /** Shared with the sync job so journal-triggered rebuilds serialize with a running sync's rebuild
    * (both must not overwrite each other). Defaults to a fresh mutex when omitted (tests). */
   rebuildLock?: Mutex;
@@ -391,13 +398,30 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
         }
       }
 
-      // GET /api/update/check — notify-only version check against GitHub Releases (never modifies the
-      // binary). Reports "disabled" when no checker is wired (tests). The checker itself never throws.
+      // GET /api/update/check — version check against GitHub Releases (never modifies the binary;
+      // installUpdate does that). Reports "disabled" when no checker is wired (tests). Never throws.
       if (seg.length === 3 && seg[1] === "update" && seg[2] === "check" && method === "GET") {
         if (!deps.checkUpdate) {
-          return json({ current: "", latest: null, updateAvailable: false, downloadUrl: null, releaseUrl: null, error: "update check unavailable" });
+          return json({ current: "", latest: null, updateAvailable: false, downloadUrl: null, releaseUrl: null, canInstall: false, error: "update check unavailable" });
         }
         return json(await deps.checkUpdate());
+      }
+
+      // POST /api/update/install — download the new build, swap the running app/exe, and relaunch.
+      // CSRF-guarded like /api/quit (it shuts the app down). 503 when no installer is wired
+      // (tests/embedded / unsupported platform). On success returns 202 and the app then restarts.
+      if (seg.length === 3 && seg[1] === "update" && seg[2] === "install" && method === "POST") {
+        if (!sameOriginLocal(req)) return json({ error: "forbidden" }, 403);
+        if (!deps.installUpdate) return json({ error: "in-place update unavailable" }, 503);
+        const r = await deps.installUpdate();
+        if (!r.ok) return json({ error: r.error ?? "update failed" }, 500);
+        return json({ installing: true }, 202);
+      }
+
+      // GET /api/version — the running app version, so the UI can poll for the relaunched server after
+      // an in-place update (reload once it reports the new version).
+      if (seg.length === 2 && seg[1] === "version" && method === "GET") {
+        return json({ version: deps.appVersion ?? "unknown" });
       }
 
       // POST /api/quit — graceful shutdown for the "Quit" button (a windowless/hidden app has no

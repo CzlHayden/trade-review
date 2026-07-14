@@ -115,14 +115,17 @@ export interface WeeklyView extends WeeklyEntry {
   trades: Trade[];
 }
 
-/** Notify-only update check against GitHub Releases. `downloadUrl` is the asset for this platform (or
- * null); `error` is set when the check couldn't complete. The app never modifies its own binary. */
+/** Update check against GitHub Releases. `downloadUrl` is the asset for this platform (or null);
+ * `canInstall` is true when the app can update itself in place (compiled binary on a supported
+ * platform with an asset) — the banner then offers "Update & Restart" instead of a download link.
+ * `error` is set when the check couldn't complete. */
 export interface UpdateStatus {
   current: string;
   latest: string | null;
   updateAvailable: boolean;
   downloadUrl: string | null;
   releaseUrl: string | null;
+  canInstall: boolean;
   error: string | null;
 }
 
@@ -164,6 +167,8 @@ export const api = {
   startSync: () => send<SyncStatus>("/api/sync", "POST"),
   quit: () => send<{ quitting: boolean }>("/api/quit", "POST"),
   updateCheck: () => get<UpdateStatus>("/api/update/check"),
+  installUpdate: () => send<{ installing: boolean }>("/api/update/install", "POST"),
+  version: () => get<{ version: string }>("/api/version"),
   opendSettings: () => get<OpendSettings>("/api/settings/opend"),
   putOpendSettings: (body: { key?: string; port?: number }) =>
     send<OpendSettings>("/api/settings/opend", "PUT", body),
