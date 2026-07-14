@@ -126,6 +126,33 @@ test("avgR/avgMae/avgMfe ignore trades that lack them; null when none", () => {
   expect(none.avgR).toBeNull();
 });
 
+test("splits R by outcome; payout ratio and breakeven win rate", () => {
+  // Three winners at +3R and one loser at −1R (the 'small losses, big wins' shape).
+  const s = computeStats([
+    tr({ realizedPnl: 30, rMultiple: 3 }),
+    tr({ realizedPnl: 30, rMultiple: 3 }),
+    tr({ realizedPnl: 30, rMultiple: 3 }),
+    tr({ realizedPnl: -10, rMultiple: -1 }),
+  ]);
+  const usd = s.byCurrency[0]!;
+  expect(usd.avgWinR).toBe(3);
+  expect(usd.avgLossR).toBe(1); // positive magnitude
+  expect(usd.payoutRatio).toBe(3); // 3R ÷ 1R
+  expect(usd.breakevenWinRate).toBeCloseTo(0.25); // 1/(1+3) — need to win 25% to break even
+});
+
+test("R split ignores trades without an R basis; payout null when a side is missing", () => {
+  const s = computeStats([
+    tr({ realizedPnl: 20, rMultiple: 2 }),
+    tr({ realizedPnl: 10 }), // no stop → excluded from R split
+  ]);
+  const usd = s.byCurrency[0]!;
+  expect(usd.avgWinR).toBe(2);
+  expect(usd.avgLossR).toBeNull(); // no losers with an R
+  expect(usd.payoutRatio).toBeNull(); // can't form a ratio without a loss side
+  expect(usd.breakevenWinRate).toBeNull();
+});
+
 test("excludes open and non-coverage trades", () => {
   const open = tr({ realizedPnl: 999 });
   open.status = "open";

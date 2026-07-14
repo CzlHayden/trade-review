@@ -1,5 +1,5 @@
 import type { CurrencyStats } from "../../src/domain/types";
-import { money, price, pct, rMultiple, signClass } from "../lib/format";
+import { money, price, pct, ratio, rMultiple, signClass } from "../lib/format";
 
 /** Currency-segmented KPI cards. One row of cards per currency — P&L is never combined across
  * currencies (each block is self-contained). */
@@ -28,6 +28,27 @@ export function Kpis({ stats }: { stats: CurrencyStats[] }) {
               // Avg R only covers trades with a known stop (an R basis). Disclose the population when
               // it's smaller than the closed-trade count, so it doesn't read as over all trades.
               sub={s.rCount < s.tradeCount ? `${s.rCount} of ${s.tradeCount} with a stop` : undefined}
+            />
+            <Kpi
+              // The asymmetry itself: how big the average winner is vs the average loser, in R. A
+              // "many small losses, few big wins" strategy shows a large win R next to a small loss R.
+              label="Avg R · win / loss"
+              value={rMultiple(s.avgWinR)}
+              cls={signClass(s.avgWinR)}
+              sub={`loss ${s.avgLossR !== null ? rMultiple(-s.avgLossR) : "—"}`}
+            />
+            <Kpi
+              label="Payout ratio"
+              value={ratio(s.payoutRatio)}
+              sub="avg win ÷ loss (R)"
+            />
+            <Kpi
+              // Breakeven win rate = the % of trades you'd need to win, at this payout, to net zero R.
+              // Green when your actual win rate clears that bar (you have a positive edge), red when not.
+              label="Breakeven win rate"
+              value={s.breakevenWinRate !== null ? pct(s.breakevenWinRate) : "—"}
+              cls={s.breakevenWinRate === null ? undefined : s.winRate >= s.breakevenWinRate ? "pos" : "neg"}
+              sub={s.breakevenWinRate !== null ? `you win ${pct(s.winRate)}` : undefined}
             />
             <Kpi
               label="Avg win / loss"

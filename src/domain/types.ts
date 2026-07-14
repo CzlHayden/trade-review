@@ -191,6 +191,12 @@ export interface CurrencyStats {
   expectancy: number; // winRate*avgWin - lossRate*avgLoss
   avgR: number | null; // mean rMultiple over trades that have one
   rCount: number; // how many of tradeCount have an R basis (a known stop) — avgR is over these only
+  // Win/loss asymmetry in R. All over the R-eligible subset (rCount trades): a strategy of many small
+  // losses + few large winners shows a big avgWinR, small avgLossR, and a high payout ratio.
+  avgWinR: number | null; // mean rMultiple of R-eligible winners (positive)
+  avgLossR: number | null; // mean magnitude of rMultiple of R-eligible losers (positive)
+  payoutRatio: number | null; // avgWinR / avgLossR — realized reward-to-risk (null when either side is absent)
+  breakevenWinRate: number | null; // avgLossR / (avgWinR + avgLossR) = 1/(1+payout) — win rate needed to net zero R
   avgMae: number | null;
   avgMfe: number | null;
   // Position sizing. The % figures are the headline (1% vs 0.5% of the account per trade is a very
