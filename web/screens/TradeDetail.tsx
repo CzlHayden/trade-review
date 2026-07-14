@@ -174,7 +174,7 @@ export function TradeDetail({ id }: { id: string }) {
               stopIsManual ? "Stop (manual)" : "Stop (working)",
               liveStopPrice !== null ? price(liveStopPrice, t.currency) : "—",
             )}
-            {stat("Locked R", rMultiple(live.lockedR), signClass(live.lockedR))}
+            {stat("Stop in R", rMultiple(live.lockedR), signClass(live.lockedR))}
           </div>
           {!stopIsManual && liveStopPrice === null && (
             <div className="neg" style={{ fontSize: 12, marginTop: 6, fontWeight: 600 }}>
@@ -188,11 +188,13 @@ export function TradeDetail({ id }: { id: string }) {
             </div>
           )}
           <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>
-            Open R is your unrealized P&L (gross of fees) on the shares held now, in R. Locked R is where your{" "}
-            {stopIsManual ? "manual" : "working"} stop sits, in R off entry: <span className="mono">0R</span> ={" "}
-            breakeven (no risk left), <span className="mono">+1R</span> = a full R secured,{" "}
-            <span className="mono">−1R</span> = the initial risk still fully on. Holding &amp; stop are as of the last
-            sync; the mark is the latest candle close.
+            Open R is your unrealized P&L (gross of fees) on the shares held now, in R. Stop in R is where your{" "}
+            {stopIsManual ? "manual" : "working"} stop sits, in R off entry — <em>not</em> a realized loss:{" "}
+            <span className="mono">−1R</span> = the initial risk still fully on,{" "}
+            <span className="mono">0R</span> = breakeven (no risk left), <span className="mono">+1R</span> = a full R
+            secured. It reads off entry per share and ignores profit already banked from partial exits (so it
+            can differ from the Positions card's <em>If stopped</em>). Holding &amp; stop are as of the last sync;
+            the mark is the latest candle close.
           </div>
         </div>
       )}
@@ -252,8 +254,10 @@ export function TradeDetail({ id }: { id: string }) {
         {stat("Avg entry / exit", `${price(t.avgEntry, t.currency)} / ${t.avgExit !== null ? price(t.avgExit, t.currency) : "—"}`)}
         {stat("Max size", qty(t.maxQty))}
         {stat(
-          "MAE / MFE",
-          `${t.mae !== null ? money(t.mae, t.currency) : "—"} / ${t.mfe !== null ? money(t.mfe, t.currency) : "—"}`,
+          "MAE / MFE (per share)",
+          // MAE is the worst adverse excursion — show it negative so it doesn't read as a gain (both
+          // are per-share price points from entry, not position dollars).
+          `${t.mae !== null ? money(-t.mae, t.currency) : "—"} / ${t.mfe !== null ? money(t.mfe, t.currency) : "—"}`,
         )}
       </div>
 

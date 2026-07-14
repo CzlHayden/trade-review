@@ -189,7 +189,12 @@ function PositionCard({ p, onOpen }: { p: OpenPosition; onOpen?: () => void }) {
 
       {atRisk && breakevenReachable && (
         <div className="pos-be">
-          <span className="pos-be-label">Breakeven stop</span>
+          <span
+            className="pos-be-label"
+            title="Move your stop here and the whole trade — including profit already banked from partial exits — nets to zero. With banked profit this sits BELOW your entry, so it's a net breakeven, not an entry-price stop."
+          >
+            Net-breakeven stop
+          </span>
           <span className="pos-be-val">{price(p.breakevenStop!, ccy)}</span>
         </div>
       )}

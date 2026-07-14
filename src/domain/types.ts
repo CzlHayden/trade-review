@@ -190,6 +190,7 @@ export interface CurrencyStats {
   avgLoss: number; // positive magnitude of the average loss
   expectancy: number; // winRate*avgWin - lossRate*avgLoss
   avgR: number | null; // mean rMultiple over trades that have one
+  rCount: number; // how many of tradeCount have an R basis (a known stop) — avgR is over these only
   avgMae: number | null;
   avgMfe: number | null;
   // Position sizing. The % figures are the headline (1% vs 0.5% of the account per trade is a very

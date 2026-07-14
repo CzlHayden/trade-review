@@ -21,7 +21,14 @@ export function Kpis({ stats }: { stats: CurrencyStats[] }) {
               cls={signClass(s.expectancy)}
               sub="per trade"
             />
-            <Kpi label="Avg R" value={rMultiple(s.avgR)} cls={signClass(s.avgR)} />
+            <Kpi
+              label="Avg R"
+              value={rMultiple(s.avgR)}
+              cls={signClass(s.avgR)}
+              // Avg R only covers trades with a known stop (an R basis). Disclose the population when
+              // it's smaller than the closed-trade count, so it doesn't read as over all trades.
+              sub={s.rCount < s.tradeCount ? `${s.rCount} of ${s.tradeCount} with a stop` : undefined}
+            />
             <Kpi
               label="Avg win / loss"
               value={`${money(s.avgWin, s.currency)}`}
@@ -61,9 +68,12 @@ export function Kpis({ stats }: { stats: CurrencyStats[] }) {
             />
             {(s.avgMae !== null || s.avgMfe !== null) && (
               <Kpi
+                // MAE is the worst ADVERSE excursion — render it negative/red so it can't read as a
+                // gain (money() would prefix "+"). Both are price points PER SHARE, not position $.
                 label="Avg MAE / MFE"
-                value={s.avgMae !== null ? money(s.avgMae, s.currency) : "—"}
-                sub={`MFE ${s.avgMfe !== null ? money(s.avgMfe, s.currency) : "—"}`}
+                value={s.avgMae !== null ? money(-s.avgMae, s.currency) : "—"}
+                cls={s.avgMae !== null ? signClass(-s.avgMae) : undefined}
+                sub={`per share · MFE ${s.avgMfe !== null ? money(s.avgMfe, s.currency) : "—"}`}
               />
             )}
           </div>
