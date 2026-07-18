@@ -294,6 +294,10 @@ export async function rebuildDerived(
     //     leaves the trade open — none of which need move avgEntry/maxQty) forces a recompute; and
     //   - the derived window/size aggregates, so a raw fill CORRECTED in place (upsertRawFills reuses
     //     the ID but may change price/qty/time) is caught even though the ID set is identical.
+    // Residual (accepted): an in-place correction that preserves avgEntry/avgExit yet moves the min/max
+    // fill price (e.g. 15/5 → 20/0) during a candle outage would still carry a stale excursion. It needs
+    // FUTU to re-send a corrected fill exactly as candles are down, and self-heals on the next candle
+    // sync — not worth persisting a fill-price signature to close. See PR #38 follow-up.
     const priorT = prior.get(t.id);
     const sameInputs =
       priorT !== undefined &&
