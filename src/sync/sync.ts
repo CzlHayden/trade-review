@@ -235,6 +235,7 @@ export async function rebuildDerived(
   const prior = new Map(allTrades(db).map((t) => [t.id, t] as const));
 
   const allFills = allRawFills(db);
+  const fillsById = new Map(allFills.map((f) => [f.id, f] as const));
   const allOrders = allRawOrders(db);
   const manual = manualStops(db); // trade id → user-entered stop (authoritative over inference)
   // Seed positions that predate our data window (reconciled against the current snapshot) so a
@@ -283,7 +284,8 @@ export async function rebuildDerived(
     } catch {
       bars = []; // a candle-source rejection must not abort the whole sync (contract: degrade to no MAE/MFE)
     }
-    const excursion = computeExcursion(t, bars, resMs);
+    const tradeFills = t.fillIds.map((id) => fillsById.get(id)).filter((f) => f !== undefined);
+    const excursion = computeExcursion(t, tradeFills, bars, resMs);
     // Degrade safely: if candles are unavailable this run, keep any excursion computed on a prior
     // sync rather than nulling it (which would silently drop mae/mfe-dependent flags). But ONLY when
     // the trade's window/shape is unchanged — a trade whose id persisted while it gained fills (e.g.
