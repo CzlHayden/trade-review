@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { useDay, useHeatmap, usePutDay, usePutHeatmapGroups } from "../lib/hooks";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useDay, useHeatmap, usePutDay, usePutHeatmapGroups, useResetHeatmapGroups } from "../lib/hooks";
 import type { HeatmapGroupRows, HeatmapRow, MarketRegime } from "../lib/api";
 import { dateTime } from "../lib/format";
 import { dayKeyOf } from "../../src/domain/time";
@@ -67,6 +67,7 @@ function GroupTable({
   onRemove,
   onAdd,
   onLabel,
+  extraHeader,
 }: {
   name: string;
   rows: HeatmapRow[];
@@ -74,6 +75,7 @@ function GroupTable({
   onRemove?: (symbol: string) => void;
   onAdd?: (symbol: string, label: string | null) => void;
   onLabel?: (symbol: string, label: string) => void;
+  extraHeader?: ReactNode; // e.g. the ↑/↓ group-reorder buttons while editing
 }) {
   const [draftSym, setDraftSym] = useState("");
   const [draftLabel, setDraftLabel] = useState("");
@@ -88,6 +90,7 @@ function GroupTable({
     <div>
       <div className="section-title" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         {name}
+        {extraHeader}
         {editing && onAdd && (
           <>
             <input
@@ -215,8 +218,10 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
   // ~30 candle fetches on it.
   const heatQ = useHeatmap(isToday);
   const putGroups = usePutHeatmapGroups();
+  const resetGroups = useResetHeatmapGroups();
   const [editing, setEditing] = useState(false);
   const [newGroup, setNewGroup] = useState("");
+  const [confirmReset, setConfirmReset] = useState(false);
   const [regime, setRegime] = useState<MarketRegime | null>(null);
   const [marketRead, setMarketRead] = useState("");
   const [notes, setNotes] = useState("");
@@ -274,6 +279,13 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
     if (liveGroups[gi]!.symbols.length > 0) return;
     putGroups.mutate(liveGroups.filter((_, i) => i !== gi));
   };
+  const moveGroup = (gi: number, dir: -1 | 1) => {
+    const j = gi + dir;
+    if (j < 0 || j >= liveGroups.length) return;
+    const next = liveGroups.slice();
+    [next[gi], next[j]] = [next[j]!, next[gi]!];
+    putGroups.mutate(next);
+  };
 
   const snapshotGroups: HeatmapGroupRows[] | null = day.data?.snapshot?.groups ?? null;
 
@@ -329,9 +341,26 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
               <button className="btn" disabled={heatQ.isFetching} onClick={() => heatQ.refetch()}>
                 {heatQ.isFetching ? "Refreshing…" : "Refresh"}
               </button>
-              <button className={`btn${editing ? " btn-primary" : ""}`} onClick={() => setEditing((e) => !e)}>
+              <button className={`btn${editing ? " btn-primary" : ""}`} onClick={() => { setEditing((e) => !e); setConfirmReset(false); }}>
                 {editing ? "Done editing" : "Edit lists"}
               </button>
+              {editing && (
+                // Two-step reset: restores the built-in lists (industry labels, EW sector group,
+                // default ordering) and discards custom groups/tickers — hence the confirm.
+                <button
+                  className={`btn${confirmReset ? " btn-primary" : ""}`}
+                  disabled={resetGroups.isPending}
+                  onClick={() => {
+                    if (!confirmReset) setConfirmReset(true);
+                    else {
+                      setConfirmReset(false);
+                      resetGroups.mutate();
+                    }
+                  }}
+                >
+                  {confirmReset ? "Really reset? (discards your lists)" : "Reset to defaults"}
+                </button>
+              )}
               {heatQ.data && (
                 <span className="faint" style={{ fontSize: 12 }}>
                   as of {dateTime(heatQ.data.asOf)} · daily closes from the public candle source
@@ -341,7 +370,7 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
             </div>
             {heatQ.isLoading && <div className="spinner">Loading market data…</div>}
             {heatQ.isError && <div className="empty card">Couldn't load market data — check your connection and retry.</div>}
-            {(heatQ.data?.groups ?? []).map((g, gi) => (
+            {(heatQ.data?.groups ?? []).map((g, gi, all) => (
               <div key={g.name}>
                 <GroupTable
                   name={g.name}
@@ -350,6 +379,20 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
                   onRemove={(s) => removeSymbol(gi, s)}
                   onAdd={(s, l) => addSymbol(gi, s, l)}
                   onLabel={(s, l) => setLabel(gi, s, l)}
+                  extraHeader={
+                    editing ? (
+                      <span style={{ display: "inline-flex", gap: 2 }}>
+                        <button className="btn btn-icon" title="Move group up" disabled={gi === 0}
+                          style={{ padding: "0 6px", fontSize: 11 }} onClick={() => moveGroup(gi, -1)}>
+                          ↑
+                        </button>
+                        <button className="btn btn-icon" title="Move group down" disabled={gi === all.length - 1}
+                          style={{ padding: "0 6px", fontSize: 11 }} onClick={() => moveGroup(gi, 1)}>
+                          ↓
+                        </button>
+                      </span>
+                    ) : null
+                  }
                 />
                 {editing && g.rows.length === 0 && (
                   <button className="btn" style={{ marginTop: 6, fontSize: 11 }} onClick={() => removeGroup(gi)}>

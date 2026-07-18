@@ -24,6 +24,7 @@ import {
   getStoredOpend,
   setStoredOpend,
   opendConnection,
+  clearHeatmapGroups,
   getHeatmapGroups,
   setHeatmapGroups,
   type HeatmapGroup,
@@ -546,6 +547,11 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
       }
       if (seg.length === 3 && seg[1] === "market" && seg[2] === "symbols") {
         if (method === "GET") return json({ groups: getHeatmapGroups(db) });
+        // DELETE = reset to defaults (drops the stored config; future default improvements apply too).
+        if (method === "DELETE") {
+          clearHeatmapGroups(db);
+          return json({ groups: getHeatmapGroups(db) });
+        }
         if (method === "PUT") {
           const b = await readJsonObject(req);
           if (!b) return json({ error: "body must be a JSON object" }, 400);

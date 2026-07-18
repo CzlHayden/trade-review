@@ -216,6 +216,7 @@ export const api = {
   heatmapGroups: () => get<HeatmapGroups>("/api/market/symbols"),
   putHeatmapGroups: (groups: Array<{ name: string; symbols: HeatmapSymbolEntry[] }>) =>
     send<HeatmapGroups>("/api/market/symbols", "PUT", { groups }),
+  resetHeatmapGroups: () => send<HeatmapGroups>("/api/market/symbols", "DELETE"),
   day: (dayKey: string) => get<DailyView>(`/api/journal/days/${dayKey}`),
   putDay: (dayKey: string, body: Record<string, unknown>) =>
     send<DailyView>(`/api/journal/days/${dayKey}`, "PUT", body),

@@ -84,6 +84,16 @@ export function usePutHeatmapGroups() {
   });
 }
 
+/** "Reset to defaults": drops the stored group config so the app's built-in lists (with industry
+ * labels and the EW sector group) apply again. */
+export function useResetHeatmapGroups() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.resetHeatmapGroups,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["heatmap"] }),
+  });
+}
+
 export const useDay = (dayKey: string) =>
   useQuery({ queryKey: ["day", dayKey], queryFn: () => api.day(dayKey), enabled: !!dayKey });
 

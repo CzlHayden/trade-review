@@ -53,11 +53,40 @@ test("PUT /api/market/symbols normalizes (uppercase, trim, in-group dedupe, labe
   expect(put.status).toBe(200);
   const body: any = await put.json();
   expect(body.groups).toEqual([
-    { name: "Mine", symbols: [{ symbol: "US.SPY", label: "S&P 500" }, { symbol: "US.QQQ", label: null }] },
+    // US.QQQ was stored label-less, but it's a known default ticker → its industry label backfills
+    // on read (this is what upgrades a config written before labels existed).
+    { name: "Mine", symbols: [{ symbol: "US.SPY", label: "S&P 500" }, { symbol: "US.QQQ", label: "Nasdaq 100" }] },
   ]);
   // survives a re-read
   const again: any = await (await app(new Request("http://x/api/market/symbols"))).json();
   expect(again.groups).toEqual(body.groups);
+  // an UNKNOWN label-less ticker stays label-less (nothing to backfill from)
+  await app(
+    new Request("http://x/api/market/symbols", {
+      method: "PUT",
+      body: JSON.stringify({ groups: [{ name: "X", symbols: ["US.ZZZZ"] }] }),
+    }),
+  );
+  const custom: any = await (await app(new Request("http://x/api/market/symbols"))).json();
+  expect(custom.groups).toEqual([{ name: "X", symbols: [{ symbol: "US.ZZZZ", label: null }] }]);
+});
+
+test("DELETE /api/market/symbols resets to the built-in defaults (labels, EW group, ordering)", async () => {
+  const { app } = harness(async () => []);
+  await app(
+    new Request("http://x/api/market/symbols", {
+      method: "PUT",
+      body: JSON.stringify({ groups: [{ name: "Custom", symbols: ["US.SPY"] }] }),
+    }),
+  );
+  const res = await app(new Request("http://x/api/market/symbols", { method: "DELETE" }));
+  expect(res.status).toBe(200);
+  const body: any = await res.json();
+  expect(body.groups).toEqual(DEFAULT_HEATMAP_GROUPS);
+  // and the EW group sits directly after the cap-weighted sectors, before Thematic
+  const names = body.groups.map((g: any) => g.name);
+  expect(names.indexOf("S&P EW sectors")).toBe(names.indexOf("S&P sectors") + 1);
+  expect(names.indexOf("S&P EW sectors")).toBeLessThan(names.indexOf("Thematic"));
 });
 
 test("PUT /api/market/symbols rejects malformed symbols and oversized bodies", async () => {

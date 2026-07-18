@@ -167,6 +167,14 @@ export const DEFAULT_HEATMAP_GROUPS: HeatmapGroup[] = [
   ]),
 ];
 
+/** Known industry labels from the default groups, used to BACKFILL a stored entry whose label is
+ * null — a config written before labels existed (or a ticker re-added without one) shows the right
+ * industry automatically. The trade-off: clearing the label of one of these tickers re-fills it on
+ * the next read; acceptable, since the label is freely editable to anything non-empty. */
+const DEFAULT_LABELS: ReadonlyMap<string, string> = new Map(
+  DEFAULT_HEATMAP_GROUPS.flatMap((grp) => grp.symbols.map((s) => [s.symbol, s.label as string])),
+);
+
 /** Read the stored groups; degrade to the defaults on a malformed/legacy row rather than throwing
  * (same self-healing posture as getStoredOpend — the next successful PUT overwrites the bad row).
  * Accepts the pre-label shape too (symbols as plain strings → label null), so a DB written by the
@@ -188,15 +196,23 @@ export function getHeatmapGroups(db: Database): HeatmapGroup[] {
     if (typeof name !== "string" || !Array.isArray(symbols)) return DEFAULT_HEATMAP_GROUPS;
     const entries: HeatmapSymbol[] = [];
     for (const s of symbols) {
-      if (typeof s === "string") entries.push({ symbol: s, label: null }); // legacy shape
+      let entry: HeatmapSymbol;
+      if (typeof s === "string") entry = { symbol: s, label: null }; // legacy shape
       else if (s !== null && typeof s === "object" && typeof (s as any).symbol === "string") {
         const label = (s as any).label;
-        entries.push({ symbol: (s as any).symbol, label: typeof label === "string" ? label : null });
+        entry = { symbol: (s as any).symbol, label: typeof label === "string" ? label : null };
       } else return DEFAULT_HEATMAP_GROUPS;
+      if (entry.label === null) entry.label = DEFAULT_LABELS.get(entry.symbol) ?? null;
+      entries.push(entry);
     }
     groups.push({ name, symbols: entries });
   }
   return groups;
+}
+
+/** Drop the stored groups so the (current) defaults apply again — the "Reset to defaults" button. */
+export function clearHeatmapGroups(db: Database): void {
+  db.run(`DELETE FROM config WHERE key = ?`, [HEATMAP_KEY]);
 }
 
 export function setHeatmapGroups(db: Database, groups: HeatmapGroup[]): void {
