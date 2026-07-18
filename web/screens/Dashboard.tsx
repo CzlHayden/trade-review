@@ -23,6 +23,12 @@ export function Dashboard() {
       {byCurrency.some((c) => c.equityCurve.length > 1) && (
         <>
           <div className="section-title">Equity curve</div>
+          {/* One-line key so the chart is self-explaining: what the line is, and what the color means
+              (EquityChart tints the whole series by the LATEST cumulative value's sign). */}
+          <div className="faint" style={{ fontSize: 11, margin: "-6px 0 8px" }}>
+            Cumulative realized P&L across closed trades, one chart per currency — green while the
+            running total is above zero, red while below.
+          </div>
           <div className="grid" style={{ gridTemplateColumns: byCurrency.length > 1 ? "1fr 1fr" : "1fr" }}>
             {byCurrency
               .filter((c) => c.equityCurve.length > 1)
