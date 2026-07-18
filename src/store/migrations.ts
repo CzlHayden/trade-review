@@ -189,6 +189,19 @@ export const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
   (db) => {
     db.run(`ALTER TABLE trades ADD COLUMN realized_so_far REAL;`);
   },
+  // v11 — user flag overrides: dismiss a computed flag you disagree with, or add one the engine
+  // missed. USER data (like journal/drawings): orphan-tolerant, no FK to trades, and it lives in its
+  // own table so every sync's flags rebuild (DELETE + reinsert) can't wipe it. Merged at read time.
+  (db) => {
+    db.run(`
+      CREATE TABLE flag_overrides (
+        trade_id TEXT NOT NULL, rule_id TEXT NOT NULL,
+        mode TEXT NOT NULL,             -- 'add' | 'dismiss'
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (trade_id, rule_id)
+      );
+    `);
+  },
 ];
 
 export function currentVersion(db: Database): number {

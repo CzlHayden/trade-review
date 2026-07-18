@@ -96,3 +96,57 @@ export function setStoredOpend(db: Database, patch: Partial<StoredOpend>): void 
 export function opendConnection(stored: StoredOpend): { key: string | undefined; port: number } {
   return { key: stored.key ?? undefined, port: stored.port ?? DEFAULT_OPEND_PORT };
 }
+
+// ---- Daily heatmap symbol groups ----------------------------------------------
+// The Daily page's ETF/sector watch groups, user-editable in the UI. Domain symbol format
+// ("US.SPY", "HK.00700") — the same format trades use, so the candle source maps them identically.
+
+const HEATMAP_KEY = "heatmap_groups";
+
+export interface HeatmapGroup {
+  name: string;
+  symbols: string[];
+}
+
+export const DEFAULT_HEATMAP_GROUPS: HeatmapGroup[] = [
+  { name: "Index / style", symbols: ["US.SPY", "US.RSP", "US.QQQ", "US.IWM", "US.DIA"] },
+  {
+    name: "S&P sectors",
+    symbols: [
+      "US.XLK", "US.XLC", "US.XLY", "US.XLP", "US.XLV", "US.XLF",
+      "US.XLI", "US.XLB", "US.XLE", "US.XLU", "US.XLRE",
+    ],
+  },
+  {
+    name: "Thematic",
+    symbols: ["US.SMH", "US.KWEB", "US.XOP", "US.KRE", "US.GLD", "US.USO", "US.TLT", "US.FXI", "US.IYR"],
+  },
+];
+
+/** Read the stored groups; degrade to the defaults on a malformed/legacy row rather than throwing
+ * (same self-healing posture as getStoredOpend — the next successful PUT overwrites the bad row). */
+export function getHeatmapGroups(db: Database): HeatmapGroup[] {
+  const raw = getConfigValue(db, HEATMAP_KEY);
+  if (!raw) return DEFAULT_HEATMAP_GROUPS;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return DEFAULT_HEATMAP_GROUPS;
+  }
+  if (!Array.isArray(parsed)) return DEFAULT_HEATMAP_GROUPS;
+  const groups: HeatmapGroup[] = [];
+  for (const g of parsed) {
+    if (g === null || typeof g !== "object") return DEFAULT_HEATMAP_GROUPS;
+    const { name, symbols } = g as Record<string, unknown>;
+    if (typeof name !== "string" || !Array.isArray(symbols) || !symbols.every((s) => typeof s === "string")) {
+      return DEFAULT_HEATMAP_GROUPS;
+    }
+    groups.push({ name, symbols: symbols as string[] });
+  }
+  return groups;
+}
+
+export function setHeatmapGroups(db: Database, groups: HeatmapGroup[]): void {
+  setConfigValue(db, HEATMAP_KEY, JSON.stringify(groups));
+}

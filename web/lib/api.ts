@@ -39,6 +39,30 @@ export interface TradeDetail {
   sizePct: number | null; // positionSize / account equity
   currentQty: number; // signed current holding from the latest snapshot (0 when flat/closed)
   positionAsOf: number; // that snapshot's clock (how fresh the holding/stop are)
+  // The user's flag corrections (already merged into `flags`): which shown flags are manual, and
+  // which computed ones are dismissed (so the editor can offer restore).
+  flagOverrides: { added: string[]; dismissed: string[] };
+}
+
+// ---- Daily market heatmap ----
+export interface HeatmapRow {
+  symbol: string;
+  last: number | null;
+  dayPct: number | null;
+  p5dPct: number | null;
+  off52wPct: number | null; // ≤ 0: distance below the trailing-52-week high
+  ytdPct: number | null;
+}
+export interface HeatmapGroupRows {
+  name: string;
+  rows: HeatmapRow[];
+}
+export interface HeatmapResponse {
+  asOf: number;
+  groups: HeatmapGroupRows[];
+}
+export interface HeatmapGroups {
+  groups: Array<{ name: string; symbols: string[] }>;
 }
 
 export interface OpenPosition {
@@ -176,6 +200,12 @@ export const api = {
     send<OpendSettings>("/api/settings/opend", "PUT", body),
   putJournal: (id: string, body: Record<string, unknown>) =>
     send<TradeDetail>(`/api/trades/${encodeURIComponent(id)}/journal`, "PUT", body),
+  putFlags: (id: string, body: { added: string[]; dismissed: string[] }) =>
+    send<TradeDetail>(`/api/trades/${encodeURIComponent(id)}/flags`, "PUT", body),
+  heatmap: () => get<HeatmapResponse>("/api/market/heatmap"),
+  heatmapGroups: () => get<HeatmapGroups>("/api/market/symbols"),
+  putHeatmapGroups: (groups: Array<{ name: string; symbols: string[] }>) =>
+    send<HeatmapGroups>("/api/market/symbols", "PUT", { groups }),
   drawings: (id: string) => get<{ drawings: Drawing[] }>(`/api/trades/${encodeURIComponent(id)}/drawings`),
   putDrawings: (id: string, drawings: Drawing[]) =>
     send<{ drawings: Drawing[] }>(`/api/trades/${encodeURIComponent(id)}/drawings`, "PUT", { drawings }),

@@ -17,7 +17,16 @@ import {
   upsertWeeklyEntry,
 } from "../store/journal";
 import { getDrawings, upsertDrawings, type Drawing } from "../store/drawings";
-import { getStoredOpend, setStoredOpend, opendConnection } from "../store/config";
+import { setFlagOverrides, type FlagOverrides } from "../store/flag-overrides";
+import {
+  getStoredOpend,
+  setStoredOpend,
+  opendConnection,
+  getHeatmapGroups,
+  setHeatmapGroups,
+  type HeatmapGroup,
+} from "../store/config";
+import { heatmapMetrics } from "../core/heatmap";
 import type { UpdateStatus } from "./update";
 import { equityAsOf, latestEquityByCurrency } from "../store/funds";
 import { rebuildDerived } from "../sync/sync";
@@ -192,6 +201,68 @@ function validDrawings(v: unknown): v is Drawing[] {
   return JSON.stringify(v).length <= MAX_DRAWINGS_BYTES;
 }
 
+// ---- Flag overrides -----------------------------------------------------------
+
+const RULE_ID_RE = /^[a-z0-9_]{1,40}$/;
+const MAX_FLAG_OVERRIDES = 30; // per list — there are ~10 rules; generous headroom, bounded storage
+
+/** Validate a PUT flags body: {added: string[], dismissed: string[]}, deduped, ids snake_case, and
+ * no id in both lists (one mode per rule — mirrors the storage PK). Null → caller 400s. */
+function parseFlagOverrides(b: Record<string, unknown>): FlagOverrides | null {
+  const list = (v: unknown): string[] | null => {
+    if (v === undefined) return [];
+    if (!Array.isArray(v) || v.length > MAX_FLAG_OVERRIDES) return null;
+    const out = new Set<string>();
+    for (const s of v) {
+      if (typeof s !== "string" || !RULE_ID_RE.test(s)) return null;
+      out.add(s);
+    }
+    return [...out];
+  };
+  const added = list(b.added);
+  const dismissed = list(b.dismissed);
+  if (added === null || dismissed === null) return null;
+  if (added.some((id) => dismissed.includes(id))) return null;
+  return { added, dismissed };
+}
+
+// ---- Daily heatmap ------------------------------------------------------------
+
+const DAY_MS = 86_400_000;
+// ~430 days of daily bars: covers the trailing-365d high AND the prior-year close for YTD.
+const HEATMAP_WINDOW_MS = 430 * DAY_MS;
+const HEATMAP_FETCH_CONCURRENCY = 6; // be polite to the free candle source
+const MAX_HEATMAP_GROUPS = 12;
+const MAX_HEATMAP_SYMBOLS = 60; // total across groups — each is a candle fetch
+// Domain symbol: "<MKT>.<code>" (code may itself contain dots/dashes, e.g. US.BRK.B).
+const SYMBOL_RE = /^[A-Z]{2,6}\.[A-Z0-9.\-]{1,15}$/;
+
+/** Validate + normalize a PUT groups body (uppercase symbols, trim names, drop empties/dupes within
+ * a group). Returns null when the shape is invalid — the caller 400s. */
+function parseHeatmapGroups(v: unknown): HeatmapGroup[] | null {
+  if (!Array.isArray(v) || v.length > MAX_HEATMAP_GROUPS) return null;
+  const out: HeatmapGroup[] = [];
+  let total = 0;
+  for (const g of v) {
+    if (g === null || typeof g !== "object") return null;
+    const name = (g as any).name;
+    const symbols = (g as any).symbols;
+    if (typeof name !== "string" || name.trim() === "" || name.length > 40) return null;
+    if (!Array.isArray(symbols)) return null;
+    const seen = new Set<string>();
+    for (const s of symbols) {
+      if (typeof s !== "string") return null;
+      const sym = s.trim().toUpperCase();
+      if (!SYMBOL_RE.test(sym)) return null;
+      seen.add(sym);
+    }
+    total += seen.size;
+    out.push({ name: name.trim(), symbols: [...seen] });
+  }
+  if (total > MAX_HEATMAP_SYMBOLS) return null;
+  return out;
+}
+
 /** Order-insensitive equality of two tag lists (getJournal returns tags sorted; a request may not). */
 function tagsEqual(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
@@ -304,6 +375,22 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
           }
           return json(tradeDetail(db, id));
         }
+        // PUT /api/trades/:id/flags — the user's flag corrections. Flags are review annotations, not
+        // inputs to risk/R/stats math, so no rebuildDerived here; reads merge overrides on the fly.
+        if (seg.length === 4 && seg[3] === "flags" && method === "PUT") {
+          if (!allTrades(db).some((t) => t.id === id)) return json({ error: "trade not found" }, 404);
+          const b = await readJsonObject(req);
+          if (!b) return json({ error: "body must be a JSON object" }, 400);
+          const ov = parseFlagOverrides(b);
+          if (ov === null) {
+            return json(
+              { error: "added/dismissed must be string arrays of rule ids, with no id in both" },
+              400,
+            );
+          }
+          setFlagOverrides(db, id, ov, deps.now());
+          return json(tradeDetail(db, id));
+        }
         if (seg.length === 4 && seg[3] === "drawings" && method === "GET") {
           return json({ drawings: getDrawings(db, id) });
         }
@@ -396,6 +483,53 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
           }
           setStoredOpend(db, patch);
           return json(view());
+        }
+      }
+
+      // /api/market/heatmap (GET) + /api/market/symbols (GET/PUT) — the Daily page. Per-symbol daily
+      // candles come through deps.candles (the SQLite-cached Yahoo source in the real app), so a
+      // reload within the cache's tail window costs no network; metrics math is pure core.
+      if (seg.length === 3 && seg[1] === "market" && seg[2] === "heatmap" && method === "GET") {
+        const groups = getHeatmapGroups(db);
+        const now = deps.now();
+        const uniq = [...new Set(groups.flatMap((g) => g.symbols))];
+        const bySymbol = new Map<string, ReturnType<typeof heatmapMetrics>>();
+        // Chunked fan-out: parallel enough to load fast, capped so ~30 symbols don't hammer Yahoo.
+        for (let i = 0; i < uniq.length; i += HEATMAP_FETCH_CONCURRENCY) {
+          await Promise.all(
+            uniq.slice(i, i + HEATMAP_FETCH_CONCURRENCY).map(async (sym) => {
+              let bars: Awaited<ReturnType<CandleSource["getCandles"]>> = [];
+              try {
+                bars = await deps.candles.getCandles(sym, now - HEATMAP_WINDOW_MS, now, DAY_MS);
+              } catch {
+                bars = []; // a single bad symbol degrades to a null row, never a 500
+              }
+              bySymbol.set(sym, heatmapMetrics(bars));
+            }),
+          );
+        }
+        return json({
+          asOf: now,
+          groups: groups.map((g) => ({
+            name: g.name,
+            rows: g.symbols.map((symbol) => ({ symbol, ...bySymbol.get(symbol)! })),
+          })),
+        });
+      }
+      if (seg.length === 3 && seg[1] === "market" && seg[2] === "symbols") {
+        if (method === "GET") return json({ groups: getHeatmapGroups(db) });
+        if (method === "PUT") {
+          const b = await readJsonObject(req);
+          if (!b) return json({ error: "body must be a JSON object" }, 400);
+          const groups = parseHeatmapGroups(b.groups);
+          if (groups === null) {
+            return json(
+              { error: "groups must be ≤12 {name, symbols[]} entries, ≤60 symbols total, symbols like US.SPY" },
+              400,
+            );
+          }
+          setHeatmapGroups(db, groups);
+          return json({ groups: getHeatmapGroups(db) });
         }
       }
 
