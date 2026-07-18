@@ -46,7 +46,7 @@ test("runSync enriches stop/risk from orders and MAE/MFE from candles", async ()
   const client = stubClient({
     getHistoryFills: async () => [
       { id: "f1", orderId: "o1", symbol: "US.AAPL", side: "BUY", qty: 100, price: 10, fee: 0, currency: "USD", time: 1000, account: "acc1" },
-      { id: "f2", orderId: "o2", symbol: "US.AAPL", side: "SELL", qty: 100, price: 11, fee: 0, currency: "USD", time: 5000, account: "acc1" },
+      { id: "f2", orderId: "o2", symbol: "US.AAPL", side: "SELL", qty: 100, price: 11, fee: 0, currency: "USD", time: 7_200_000, account: "acc1" },
     ],
     getHistoryOrders: async () => [
       { id: "s1", symbol: "US.AAPL", side: "SELL", type: "STOP", qty: 100, price: null, triggerPrice: 9, status: "SUBMITTED", createTime: 1500, updateTime: null, account: "acc1" },
@@ -54,7 +54,8 @@ test("runSync enriches stop/risk from orders and MAE/MFE from candles", async ()
   });
   const candles: CandleSource = {
     getCandles: async (): Promise<Candle[]> => [
-      { time: 1000, open: 10, high: 13, low: 8, close: 11, volume: 1 }, // high 13 → mfe 3; low 8 → mae 2
+      // 1h bar (start 1000) sits fully inside the 2h hold [1000, 7.2M) → high 13 → mfe 3; low 8 → mae 2.
+      { time: 1000, open: 10, high: 13, low: 8, close: 11, volume: 1 },
     ],
   };
   await runSync({ db, client, candles, config: DEFAULT_RULE_CONFIG, now: 10_000 });
@@ -216,10 +217,11 @@ test("runSync carries forward MAE/MFE when candles degrade (no silent regression
   const db = openTestDb();
   const fills = [
     { id: "f1", orderId: "o1", symbol: "US.AAPL", side: "BUY" as const, qty: 100, price: 10, fee: 0, currency: "USD", time: 1000, account: "acc1" },
-    { id: "f2", orderId: "o2", symbol: "US.AAPL", side: "SELL" as const, qty: 100, price: 11, fee: 0, currency: "USD", time: 5000, account: "acc1" },
+    { id: "f2", orderId: "o2", symbol: "US.AAPL", side: "SELL" as const, qty: 100, price: 11, fee: 0, currency: "USD", time: 7_200_000, account: "acc1" },
   ];
   const client = stubClient({ getHistoryFills: async () => fills });
   const withCandles: CandleSource = {
+    // 1h bar (start 1000) fully inside the 2h hold → mae 2 (low 8), mfe 3 (high 13).
     getCandles: async () => [{ time: 1000, open: 10, high: 13, low: 8, close: 11, volume: 1 }],
   };
   await runSync({ db, client, candles: withCandles, config: DEFAULT_RULE_CONFIG, now: 10_000 });

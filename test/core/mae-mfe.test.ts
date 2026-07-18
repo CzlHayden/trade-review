@@ -33,32 +33,50 @@ test("short: MFE from lowest low, MAE from highest high", () => {
 });
 
 test("candles fully outside the trade window are ignored", () => {
-  const t = longTrade(); // window [60000, 180000)
+  const t = longTrade(); // window [60000, 180000), entry 10, exit 12
   const candles = [
-    candle(0, 1, 100), // bar [0, 60000) ends exactly at open → no overlap → ignored
+    candle(0, 1, 100), // bar [0, 60000) ends at open, not fully inside → ignored
     candle(240_000, 1, 100), // well after close → ignored
     candle(120_000, 9, 11),
   ];
   const r = computeExcursion(t, candles, RES);
-  expect(r.mfe).toBe(1); // 11 - 10, only the in-window bar counts
+  expect(r.mfe).toBe(2); // exit fill at 12 is a real favorable point, above the bar high of 11
   expect(r.mae).toBe(1); // 10 - 9
 });
 
-test("the entry bar is included even though it starts before openTime", () => {
-  // Enter mid-bar at 90000; the 60000 bar [60000,120000) contains the entry.
-  const t = buildTrades([fill("BUY", 100, 10, { time: 90_000 })])[0]!;
-  const candles = [candle(60_000, 8, 11)];
+test("a boundary bar straddling entry is EXCLUDED — its extremes may predate the fill", () => {
+  // The ANET bug: enter mid-bar at 90000 AFTER an early spike. The 60000 bar [60000,120000) straddles
+  // openTime, so its high/low can be pre-entry price the trade never held → it must not count.
+  const t = buildTrades([
+    fill("BUY", 100, 10, { time: 90_000 }),
+    fill("SELL", 100, 9, { time: 150_000 }), // straddles close too; window [90000,150000)
+  ])[0]!;
+  const candles = [candle(60_000, 8, 20)]; // spike to 20 lives in the straddling entry bar
   const r = computeExcursion(t, candles, RES);
-  expect(r.mae).toBe(2); // 10 - 8 — worst excursion in the entry bar is captured
-  expect(r.mfe).toBe(1); // 11 - 10
+  expect(r.mfe).toBe(0); // NOT 10 — the 20 high predates entry; no in-hold bar shows a gain
+  expect(r.mae).toBe(1); // 10 - 9, from the exit anchor (the 8 low is also outside the hold)
 });
 
-test("a bar starting exactly at closeTime is excluded (fully post-exit)", () => {
-  const t = longTrade(); // closes at 180000
-  const candles = [candle(120_000, 9, 11), candle(180_000, 1, 100)];
+test("a boundary bar straddling exit is EXCLUDED — its extremes may postdate the fill", () => {
+  // The AMD bug: the exit bar's low happened AFTER the exit fill and must not inflate MAE.
+  const t = longTrade(); // window [60000, 180000), entry 10, exit 12
+  const candles = [candle(120_000, 9, 11), candle(150_000, 1, 100)]; // 150000 bar straddles close 180000
   const r = computeExcursion(t, candles, RES);
-  expect(r.mfe).toBe(1); // the post-exit 180000 bar does not pollute
-  expect(r.mae).toBe(1);
+  expect(r.mfe).toBe(2); // exit at 12; the 100 high in the straddling bar is ignored
+  expect(r.mae).toBe(1); // 10 - 9; the post-exit 1 low is ignored
+});
+
+test("no fully-inside bar → excursion falls back to the entry/exit fills", () => {
+  // Short trade whose whole hold sits inside one straddling bar: no bar is fully inside, so the fills
+  // anchor it. Never over-states, and a losing short still shows its adverse move to the exit.
+  const short = buildTrades([
+    fill("SELL", 100, 20, { time: 90_000 }),
+    fill("BUY", 100, 22, { time: 150_000 }), // loss: covered higher
+  ])[0]!;
+  const candles = [candle(60_000, 5, 40)]; // one bar straddling the whole hold
+  const r = computeExcursion(short, candles, RES);
+  expect(r.mfe).toBe(0); // never went favorable (below 20) on any in-hold evidence
+  expect(r.mae).toBe(2); // 22 - 20, the adverse move to the exit fill
 });
 
 test("MAE/MFE clamp to >= 0 when price never went adverse/favorable", () => {
