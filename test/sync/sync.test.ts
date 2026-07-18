@@ -269,6 +269,29 @@ test("runSync does NOT carry forward MAE/MFE when the trade shape changed (open 
   expect(t.mfe).toBeNull();
 });
 
+test("runSync does NOT carry forward MAE/MFE when a partial exit is added mid-outage (trade stays open)", async () => {
+  // A gained fill shifts the excursion anchors even if the trade stays open and its avgEntry/maxQty
+  // don't move — so the carry-forward guard keys on the fill SET, not just window shape.
+  const db = openTestDb();
+  const buy = { id: "f1", orderId: "o1", symbol: "US.AAPL", side: "BUY" as const, qty: 100, price: 10, fee: 0, currency: "USD", time: 1000, account: "acc1" };
+  const partial = { id: "f2", orderId: "o2", symbol: "US.AAPL", side: "SELL" as const, qty: 40, price: 13, fee: 0, currency: "USD", time: 5000, account: "acc1" };
+  const withCandles: CandleSource = {
+    getCandles: async () => [{ time: 1000, open: 10, high: 13, low: 8, close: 11, volume: 1 }],
+  };
+  const held100: RawPosition[] = [{ account: "acc1", symbol: "US.AAPL", qty: 100, avgCost: 10, price: null, currency: "USD", time: 0 }];
+  const held60: RawPosition[] = [{ account: "acc1", symbol: "US.AAPL", qty: 60, avgCost: 10, price: null, currency: "USD", time: 0 }];
+  // sync 1: just the BUY, holding 100 → OPEN, candles present → mae/mfe computed.
+  await runSync({ db, client: stubClient({ getHistoryFills: async () => [buy], getPositions: async () => held100 }), candles: withCandles, config: DEFAULT_RULE_CONFIG, now: 10_000 });
+  expect(allTrades(db)[0]!.mae).not.toBeNull();
+  // sync 2: a partial exit arrives (still holding 60 → still OPEN, same maxQty/avgEntry) during a
+  // candle outage. The new 13 fill would move the anchors, so the stale excursion must NOT be reused.
+  await runSync({ db, client: stubClient({ getHistoryFills: async () => [buy, partial], getPositions: async () => held60 }), candles: noCandles, config: DEFAULT_RULE_CONFIG, now: 20_000 });
+  const t = allTrades(db)[0]!;
+  expect(t.status).toBe("open");
+  expect(t.mae).toBeNull();
+  expect(t.mfe).toBeNull();
+});
+
 function rawFill(side: "BUY" | "SELL", qty: number, over: Partial<RawFill> = {}): RawFill {
   return {
     id: over.id ?? "f", orderId: over.orderId ?? "o", symbol: over.symbol ?? "US.AAPL", side, qty,

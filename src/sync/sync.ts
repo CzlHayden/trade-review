@@ -286,18 +286,20 @@ export async function rebuildDerived(
     }
     const tradeFills = t.fillIds.map((id) => fillsById.get(id)).filter((f) => f !== undefined);
     const excursion = computeExcursion(t, tradeFills, bars, resMs);
-    // Degrade safely: if candles are unavailable this run, keep any excursion computed on a prior
-    // sync rather than nulling it (which would silently drop mae/mfe-dependent flags). But ONLY when
-    // the trade's window/shape is unchanged — a trade whose id persisted while it gained fills (e.g.
-    // open → closed, or scaled) has a different window, so the old excursion would be stale.
+    // Degrade safely: if candles are unavailable this run, keep any excursion computed on a prior sync
+    // rather than nulling it (which would silently drop mae/mfe-dependent flags). But ONLY when the
+    // excursion INPUTS are unchanged. The fills are those inputs — they fix the window, the avgEntry
+    // reference, and the price anchors — so an identical fill set is the exact condition. Any gained
+    // fill (open → closed, a scale-in/out, or a partial exit that leaves the trade open) shifts the
+    // anchors, so it must recompute, never carry forward. (closeTime/avgEntry/maxQty don't catch a
+    // partial exit on a still-open trade: none of them move.)
     const priorT = prior.get(t.id);
-    const sameShape =
+    const sameInputs =
       priorT !== undefined &&
-      priorT.closeTime === t.closeTime &&
-      priorT.avgEntry === t.avgEntry &&
-      priorT.maxQty === t.maxQty;
-    const mae = excursion.mae ?? (sameShape ? priorT.mae : null);
-    const mfe = excursion.mfe ?? (sameShape ? priorT.mfe : null);
+      priorT.fillIds.length === t.fillIds.length &&
+      priorT.fillIds.every((id, i) => id === t.fillIds[i]);
+    const mae = excursion.mae ?? (sameInputs ? priorT.mae : null);
+    const mfe = excursion.mfe ?? (sameInputs ? priorT.mfe : null);
 
     const enriched: Trade = {
       ...t,
