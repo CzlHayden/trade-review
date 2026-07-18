@@ -7,12 +7,14 @@ import type { RuleConfig, Trade } from "../domain/types";
 import { computeStats, breakdown } from "../core/analytics";
 import { type Res, windowFor } from "../core/candle-res";
 import { allTrades, flagsForTrade } from "../store/repos";
-import { holdBucket, isValidIsoWeek, weekRange } from "../domain/time";
-import type { Journal, WatchlistItem } from "../domain/journal-types";
+import { dayKeyOf, holdBucket, isValidDayKey, isValidIsoWeek, weekRange } from "../domain/time";
+import type { Journal, MarketRegime, WatchlistItem } from "../domain/journal-types";
 import {
+  getDailyEntry,
   getJournal,
   getWeeklyEntry,
   tradesInRange,
+  upsertDailyEntry,
   upsertJournal,
   upsertWeeklyEntry,
 } from "../store/journal";
@@ -201,6 +203,22 @@ function validDrawings(v: unknown): v is Drawing[] {
   return JSON.stringify(v).length <= MAX_DRAWINGS_BYTES;
 }
 
+// ---- Daily journal ------------------------------------------------------------
+
+const REGIMES: ReadonlyArray<MarketRegime> = ["UPTREND", "CHOP", "DOWNTREND"];
+// A snapshot is ~60 symbols × 6 numbers — a few KB. 512KB is a generous ceiling that still stops a
+// runaway client from bloating the DB.
+const MAX_SNAPSHOT_BYTES = 512 * 1024;
+
+/** The client's heatmap snapshot to freeze for the day: must be the response shape it renders
+ * ({groups: [...]}) and reasonably sized. Loose on the row internals — it's display data from our
+ * own local SPA, replayed verbatim; the renderer null-guards every field. */
+function validSnapshot(v: unknown): boolean {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
+  if (!Array.isArray((v as any).groups)) return false;
+  return JSON.stringify(v).length <= MAX_SNAPSHOT_BYTES;
+}
+
 // ---- Flag overrides -----------------------------------------------------------
 
 const RULE_ID_RE = /^[a-z0-9_]{1,40}$/;
@@ -234,11 +252,12 @@ const HEATMAP_WINDOW_MS = 430 * DAY_MS;
 const HEATMAP_FETCH_CONCURRENCY = 6; // be polite to the free candle source
 const MAX_HEATMAP_GROUPS = 12;
 const MAX_HEATMAP_SYMBOLS = 60; // total across groups — each is a candle fetch
+const MAX_LABEL_LEN = 40; // industry/name shown beside the ticker
 // Domain symbol: "<MKT>.<code>" (code may itself contain dots/dashes, e.g. US.BRK.B).
 const SYMBOL_RE = /^[A-Z]{2,6}\.[A-Z0-9.\-]{1,15}$/;
 
-/** Validate + normalize a PUT groups body (uppercase symbols, trim names, drop empties/dupes within
- * a group). Returns null when the shape is invalid — the caller 400s. */
+/** Validate + normalize a PUT groups body (uppercase symbols, trim names/labels, drop dupes within
+ * a group; a plain-string symbol entry is accepted as label-less). Null when invalid — caller 400s. */
 function parseHeatmapGroups(v: unknown): HeatmapGroup[] | null {
   if (!Array.isArray(v) || v.length > MAX_HEATMAP_GROUPS) return null;
   const out: HeatmapGroup[] = [];
@@ -249,15 +268,24 @@ function parseHeatmapGroups(v: unknown): HeatmapGroup[] | null {
     const symbols = (g as any).symbols;
     if (typeof name !== "string" || name.trim() === "" || name.length > 40) return null;
     if (!Array.isArray(symbols)) return null;
-    const seen = new Set<string>();
+    const seen = new Map<string, string | null>();
     for (const s of symbols) {
-      if (typeof s !== "string") return null;
-      const sym = s.trim().toUpperCase();
+      let rawSym: unknown;
+      let rawLabel: unknown = null;
+      if (typeof s === "string") rawSym = s;
+      else if (s !== null && typeof s === "object") {
+        rawSym = (s as any).symbol;
+        rawLabel = (s as any).label ?? null;
+      } else return null;
+      if (typeof rawSym !== "string") return null;
+      const sym = rawSym.trim().toUpperCase();
       if (!SYMBOL_RE.test(sym)) return null;
-      seen.add(sym);
+      if (rawLabel !== null && typeof rawLabel !== "string") return null;
+      const label = rawLabel === null ? null : rawLabel.trim().slice(0, MAX_LABEL_LEN) || null;
+      if (!seen.has(sym) || label !== null) seen.set(sym, label); // dupe keeps the labeled entry
     }
     total += seen.size;
-    out.push({ name: name.trim(), symbols: [...seen] });
+    out.push({ name: name.trim(), symbols: [...seen].map(([symbol, label]) => ({ symbol, label })) });
   }
   if (total > MAX_HEATMAP_SYMBOLS) return null;
   return out;
@@ -492,7 +520,7 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
       if (seg.length === 3 && seg[1] === "market" && seg[2] === "heatmap" && method === "GET") {
         const groups = getHeatmapGroups(db);
         const now = deps.now();
-        const uniq = [...new Set(groups.flatMap((g) => g.symbols))];
+        const uniq = [...new Set(groups.flatMap((g) => g.symbols.map((s) => s.symbol)))];
         const bySymbol = new Map<string, ReturnType<typeof heatmapMetrics>>();
         // Chunked fan-out: parallel enough to load fast, capped so ~30 symbols don't hammer Yahoo.
         for (let i = 0; i < uniq.length; i += HEATMAP_FETCH_CONCURRENCY) {
@@ -512,7 +540,7 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
           asOf: now,
           groups: groups.map((g) => ({
             name: g.name,
-            rows: g.symbols.map((symbol) => ({ symbol, ...bySymbol.get(symbol)! })),
+            rows: g.symbols.map(({ symbol, label }) => ({ symbol, label, ...bySymbol.get(symbol)! })),
           })),
         });
       }
@@ -618,6 +646,58 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
             updatedAt: 0,
           };
           return json({ ...entry, trades: tradesInRange(db, start, end) });
+        }
+      }
+
+      // /api/journal/days/:date (GET + PUT) — the daily journal. On PUT the client may include its
+      // current heatmap as `snapshot`; it's frozen ONLY when the entry is TODAY's (local clock, same
+      // machine as the SPA) — a text edit to a past day must never overwrite that day's history with
+      // today's market. Omitting `snapshot` always preserves whatever is stored.
+      if (seg.length === 4 && seg[1] === "journal" && seg[2] === "days") {
+        const dayKey = decodeURIComponent(seg[3]!);
+        if (!isValidDayKey(dayKey)) return json({ error: "bad date (want a real YYYY-MM-DD)" }, 400);
+        if (method === "PUT") {
+          const b = await readJsonObject(req);
+          if (!b) return json({ error: "body must be a JSON object" }, 400);
+          if (b.regime != null && !REGIMES.includes(b.regime as MarketRegime)) {
+            return json({ error: "regime must be UPTREND | CHOP | DOWNTREND | null" }, 400);
+          }
+          const prev = getDailyEntry(db, dayKey);
+          const isToday = dayKey === dayKeyOf(deps.now());
+          let snapshotJson = prev?.snapshotJson ?? null;
+          let snapshotAt = prev?.snapshotAt ?? null;
+          if (b.snapshot !== undefined && isToday) {
+            if (!validSnapshot(b.snapshot)) {
+              return json({ error: "snapshot must be a {groups: [...]} object ≤ 512KB" }, 400);
+            }
+            snapshotJson = JSON.stringify(b.snapshot);
+            snapshotAt = deps.now();
+          }
+          upsertDailyEntry(db, {
+            id: dayKey,
+            regime: (b.regime as MarketRegime | null | undefined) ?? null,
+            marketRead: (b.marketRead as string | null | undefined) ?? null,
+            notes: (b.notes as string | null | undefined) ?? null,
+            snapshotJson,
+            snapshotAt,
+            updatedAt: deps.now(),
+          });
+        }
+        if (method === "GET" || method === "PUT") {
+          const e = getDailyEntry(db, dayKey);
+          if (!e) {
+            return json({ id: dayKey, regime: null, marketRead: null, notes: null, snapshot: null, snapshotAt: null, updatedAt: 0 });
+          }
+          // A malformed stored snapshot degrades to null (self-healing on the next today-save).
+          let snapshot: unknown = null;
+          if (e.snapshotJson !== null) {
+            try {
+              snapshot = JSON.parse(e.snapshotJson);
+            } catch {
+              snapshot = null;
+            }
+          }
+          return json({ id: e.id, regime: e.regime, marketRead: e.marketRead, notes: e.notes, snapshot, snapshotAt: e.snapshotAt, updatedAt: e.updatedAt });
         }
       }
 

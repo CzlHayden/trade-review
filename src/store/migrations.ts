@@ -202,6 +202,21 @@ export const MIGRATIONS: ReadonlyArray<(db: Database) => void> = [
       );
     `);
   },
+  // v12 — daily journal (the Daily page): the user's market view per local calendar day, plus a
+  // frozen JSON snapshot of that day's sector/index heatmap so a past day reads as it looked THEN
+  // (later candle revisions / list edits can't rewrite history). USER data — no FK anywhere.
+  (db) => {
+    db.run(`
+      CREATE TABLE daily_entries (
+        id TEXT PRIMARY KEY,            -- local date key "YYYY-MM-DD"
+        regime TEXT,                    -- 'UPTREND' | 'CHOP' | 'DOWNTREND'
+        market_read TEXT, notes TEXT,
+        snapshot TEXT,                  -- heatmap response JSON captured at save time
+        snapshot_at INTEGER,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+  },
 ];
 
 export function currentVersion(db: Database): number {

@@ -10,11 +10,11 @@ import type {
   StopInfo,
   Trade,
 } from "../../src/domain/types";
-import type { Journal, WeeklyEntry, WatchlistItem } from "../../src/domain/journal-types";
+import type { DailyEntry, Journal, MarketRegime, WeeklyEntry, WatchlistItem } from "../../src/domain/journal-types";
 import type { Drawing } from "../../src/store/drawings";
 import type { Res } from "../../src/core/candle-res"; // single source of truth for the resolution union
 
-export type { Breakdown, Candle, Flag, Stats, Trade, StopInfo, RawFill, RawOrder, Journal, WeeklyEntry, WatchlistItem, Drawing, Res };
+export type { Breakdown, Candle, Flag, Stats, Trade, StopInfo, RawFill, RawOrder, Journal, WeeklyEntry, WatchlistItem, Drawing, Res, DailyEntry, MarketRegime };
 
 /** A trade row from GET /api/trades — base Trade plus embedded journal/flags for the list. */
 export interface TradeRow extends Trade {
@@ -47,6 +47,7 @@ export interface TradeDetail {
 // ---- Daily market heatmap ----
 export interface HeatmapRow {
   symbol: string;
+  label: string | null; // user-editable industry/name shown beside the ticker
   last: number | null;
   dayPct: number | null;
   p5dPct: number | null;
@@ -61,8 +62,17 @@ export interface HeatmapResponse {
   asOf: number;
   groups: HeatmapGroupRows[];
 }
+export interface HeatmapSymbolEntry {
+  symbol: string;
+  label: string | null;
+}
 export interface HeatmapGroups {
-  groups: Array<{ name: string; symbols: string[] }>;
+  groups: Array<{ name: string; symbols: HeatmapSymbolEntry[] }>;
+}
+
+/** Daily journal view: the entry plus its frozen heatmap (null until a today-save captures one). */
+export interface DailyView extends DailyEntry {
+  snapshot: HeatmapResponse | null;
 }
 
 export interface OpenPosition {
@@ -204,8 +214,11 @@ export const api = {
     send<TradeDetail>(`/api/trades/${encodeURIComponent(id)}/flags`, "PUT", body),
   heatmap: () => get<HeatmapResponse>("/api/market/heatmap"),
   heatmapGroups: () => get<HeatmapGroups>("/api/market/symbols"),
-  putHeatmapGroups: (groups: Array<{ name: string; symbols: string[] }>) =>
+  putHeatmapGroups: (groups: Array<{ name: string; symbols: HeatmapSymbolEntry[] }>) =>
     send<HeatmapGroups>("/api/market/symbols", "PUT", { groups }),
+  day: (dayKey: string) => get<DailyView>(`/api/journal/days/${dayKey}`),
+  putDay: (dayKey: string, body: Record<string, unknown>) =>
+    send<DailyView>(`/api/journal/days/${dayKey}`, "PUT", body),
   drawings: (id: string) => get<{ drawings: Drawing[] }>(`/api/trades/${encodeURIComponent(id)}/drawings`),
   putDrawings: (id: string, drawings: Drawing[]) =>
     send<{ drawings: Drawing[] }>(`/api/trades/${encodeURIComponent(id)}/drawings`, "PUT", { drawings }),

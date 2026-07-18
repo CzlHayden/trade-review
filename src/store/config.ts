@@ -100,31 +100,77 @@ export function opendConnection(stored: StoredOpend): { key: string | undefined;
 // ---- Daily heatmap symbol groups ----------------------------------------------
 // The Daily page's ETF/sector watch groups, user-editable in the UI. Domain symbol format
 // ("US.SPY", "HK.00700") — the same format trades use, so the candle source maps them identically.
+// Each entry carries an optional user-editable `label` (the industry/name shown beside the ticker).
 
 const HEATMAP_KEY = "heatmap_groups";
 
+export interface HeatmapSymbol {
+  symbol: string;
+  label: string | null; // "Technology", "China Internet", … — free text, user-editable
+}
+
 export interface HeatmapGroup {
   name: string;
-  symbols: string[];
+  symbols: HeatmapSymbol[];
+}
+
+function g(name: string, entries: Array<[string, string]>): HeatmapGroup {
+  return { name, symbols: entries.map(([symbol, label]) => ({ symbol, label })) };
 }
 
 export const DEFAULT_HEATMAP_GROUPS: HeatmapGroup[] = [
-  { name: "Index / style", symbols: ["US.SPY", "US.RSP", "US.QQQ", "US.IWM", "US.DIA"] },
-  {
-    name: "S&P sectors",
-    symbols: [
-      "US.XLK", "US.XLC", "US.XLY", "US.XLP", "US.XLV", "US.XLF",
-      "US.XLI", "US.XLB", "US.XLE", "US.XLU", "US.XLRE",
-    ],
-  },
-  {
-    name: "Thematic",
-    symbols: ["US.SMH", "US.KWEB", "US.XOP", "US.KRE", "US.GLD", "US.USO", "US.TLT", "US.FXI", "US.IYR"],
-  },
+  g("Index / style", [
+    ["US.SPY", "S&P 500"],
+    ["US.RSP", "S&P 500 Equal Weight"],
+    ["US.QQQ", "Nasdaq 100"],
+    ["US.IWM", "Russell 2000"],
+    ["US.DIA", "Dow 30"],
+  ]),
+  g("S&P sectors", [
+    ["US.XLK", "Technology"],
+    ["US.XLC", "Communication Services"],
+    ["US.XLY", "Consumer Discretionary"],
+    ["US.XLP", "Consumer Staples"],
+    ["US.XLV", "Health Care"],
+    ["US.XLF", "Financials"],
+    ["US.XLI", "Industrials"],
+    ["US.XLB", "Materials"],
+    ["US.XLE", "Energy"],
+    ["US.XLU", "Utilities"],
+    ["US.XLRE", "Real Estate"],
+  ]),
+  // Equal-weight mirrors of the cap-weighted sectors above, in the same order — reading the two
+  // tables against each other shows whether a sector's move is broad or just a few mega-caps.
+  g("S&P EW sectors", [
+    ["US.RSPT", "EW Technology"],
+    ["US.RSPC", "EW Communication Services"],
+    ["US.RSPD", "EW Consumer Discretionary"],
+    ["US.RSPS", "EW Consumer Staples"],
+    ["US.RSPH", "EW Health Care"],
+    ["US.RSPF", "EW Financials"],
+    ["US.RSPN", "EW Industrials"],
+    ["US.RSPM", "EW Materials"],
+    ["US.RSPG", "EW Energy"],
+    ["US.RSPU", "EW Utilities"],
+    ["US.RSPR", "EW Real Estate"],
+  ]),
+  g("Thematic", [
+    ["US.SMH", "Semiconductors"],
+    ["US.KWEB", "China Internet"],
+    ["US.XOP", "Oil & Gas Exploration"],
+    ["US.KRE", "Regional Banks"],
+    ["US.GLD", "Gold"],
+    ["US.USO", "Oil (WTI)"],
+    ["US.TLT", "20+ yr Treasuries"],
+    ["US.FXI", "China Large-Cap"],
+    ["US.IYR", "US Real Estate"],
+  ]),
 ];
 
 /** Read the stored groups; degrade to the defaults on a malformed/legacy row rather than throwing
- * (same self-healing posture as getStoredOpend — the next successful PUT overwrites the bad row). */
+ * (same self-healing posture as getStoredOpend — the next successful PUT overwrites the bad row).
+ * Accepts the pre-label shape too (symbols as plain strings → label null), so a DB written by the
+ * previous build upgrades losslessly on read. */
 export function getHeatmapGroups(db: Database): HeatmapGroup[] {
   const raw = getConfigValue(db, HEATMAP_KEY);
   if (!raw) return DEFAULT_HEATMAP_GROUPS;
@@ -136,13 +182,19 @@ export function getHeatmapGroups(db: Database): HeatmapGroup[] {
   }
   if (!Array.isArray(parsed)) return DEFAULT_HEATMAP_GROUPS;
   const groups: HeatmapGroup[] = [];
-  for (const g of parsed) {
-    if (g === null || typeof g !== "object") return DEFAULT_HEATMAP_GROUPS;
-    const { name, symbols } = g as Record<string, unknown>;
-    if (typeof name !== "string" || !Array.isArray(symbols) || !symbols.every((s) => typeof s === "string")) {
-      return DEFAULT_HEATMAP_GROUPS;
+  for (const grp of parsed) {
+    if (grp === null || typeof grp !== "object") return DEFAULT_HEATMAP_GROUPS;
+    const { name, symbols } = grp as Record<string, unknown>;
+    if (typeof name !== "string" || !Array.isArray(symbols)) return DEFAULT_HEATMAP_GROUPS;
+    const entries: HeatmapSymbol[] = [];
+    for (const s of symbols) {
+      if (typeof s === "string") entries.push({ symbol: s, label: null }); // legacy shape
+      else if (s !== null && typeof s === "object" && typeof (s as any).symbol === "string") {
+        const label = (s as any).label;
+        entries.push({ symbol: (s as any).symbol, label: typeof label === "string" ? label : null });
+      } else return DEFAULT_HEATMAP_GROUPS;
     }
-    groups.push({ name, symbols: symbols as string[] });
+    groups.push({ name, symbols: entries });
   }
   return groups;
 }

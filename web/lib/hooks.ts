@@ -67,18 +67,31 @@ export function usePutFlags(id: string) {
   });
 }
 
-// ---- Daily market heatmap ----
+// ---- Daily market heatmap + daily journal ----
 // The server fans out to the candle source, so give it a real staleTime — a page revisit within a few
-// minutes reuses the cached response instead of re-hitting Yahoo ~25 times.
-export const useHeatmap = () =>
-  useQuery({ queryKey: ["heatmap"], queryFn: api.heatmap, staleTime: 5 * 60_000 });
+// minutes reuses the cached response instead of re-hitting Yahoo ~25 times. `enabled` lets the Daily
+// page skip the live fetch entirely when it's showing a past day's frozen snapshot.
+export const useHeatmap = (enabled = true) =>
+  useQuery({ queryKey: ["heatmap"], queryFn: api.heatmap, staleTime: 5 * 60_000, enabled });
 
 export function usePutHeatmapGroups() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (groups: Array<{ name: string; symbols: string[] }>) => api.putHeatmapGroups(groups),
+    mutationFn: (groups: Array<{ name: string; symbols: Array<{ symbol: string; label: string | null }> }>) =>
+      api.putHeatmapGroups(groups),
     // The groups changed → the heatmap's composition changed; refetch it (new symbols need candles).
     onSuccess: () => qc.invalidateQueries({ queryKey: ["heatmap"] }),
+  });
+}
+
+export const useDay = (dayKey: string) =>
+  useQuery({ queryKey: ["day", dayKey], queryFn: () => api.day(dayKey), enabled: !!dayKey });
+
+export function usePutDay(dayKey: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => api.putDay(dayKey, body),
+    onSuccess: (view) => qc.setQueryData(["day", dayKey], view),
   });
 }
 

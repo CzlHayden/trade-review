@@ -102,7 +102,7 @@ export async function main(): Promise<void> {
 
   // Update check, cached so navigating around doesn't hammer the GitHub API (unauth = 60 req/hr).
   // Failed checks aren't cached, so a transient outage doesn't suppress checks for hours.
-  const REPO = "keithzrc/trade-review";
+  const REPO = "CzlHayden/trade-review"; // this fork's releases feed the update banner + self-update
   const UPDATE_TTL_MS = 6 * 60 * 60_000;
   const appVersion = (pkg as { version?: string }).version ?? "0.0.0";
   // In-place update needs the compiled binary (it swaps the packaged app/exe) on a supported platform.

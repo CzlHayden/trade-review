@@ -34,17 +34,27 @@ test("GET /api/market/symbols returns the defaults when nothing is stored", asyn
   expect(body.groups).toEqual(DEFAULT_HEATMAP_GROUPS);
 });
 
-test("PUT /api/market/symbols normalizes (uppercase, trim, in-group dedupe) and persists", async () => {
+test("PUT /api/market/symbols normalizes (uppercase, trim, in-group dedupe, labels) and persists", async () => {
   const { app } = harness(async () => []);
   const put = await app(
     new Request("http://x/api/market/symbols", {
       method: "PUT",
-      body: JSON.stringify({ groups: [{ name: "  Mine ", symbols: ["us.spy", "US.SPY", " us.qqq "] }] }),
+      body: JSON.stringify({
+        groups: [
+          {
+            name: "  Mine ",
+            // plain strings (legacy shape) and labeled entries both accepted; a dupe keeps the label
+            symbols: ["us.spy", { symbol: "US.SPY", label: " S&P 500 " }, { symbol: " us.qqq ", label: null }],
+          },
+        ],
+      }),
     }),
   );
   expect(put.status).toBe(200);
   const body: any = await put.json();
-  expect(body.groups).toEqual([{ name: "Mine", symbols: ["US.SPY", "US.QQQ"] }]);
+  expect(body.groups).toEqual([
+    { name: "Mine", symbols: [{ symbol: "US.SPY", label: "S&P 500" }, { symbol: "US.QQQ", label: null }] },
+  ]);
   // survives a re-read
   const again: any = await (await app(new Request("http://x/api/market/symbols"))).json();
   expect(again.groups).toEqual(body.groups);
@@ -73,7 +83,9 @@ test("GET /api/market/heatmap computes rows per stored group and degrades bad sy
   await app(
     new Request("http://x/api/market/symbols", {
       method: "PUT",
-      body: JSON.stringify({ groups: [{ name: "G", symbols: ["US.OK", "US.EMPTY", "US.BAD"] }] }),
+      body: JSON.stringify({
+        groups: [{ name: "G", symbols: [{ symbol: "US.OK", label: "Okay Industries" }, "US.EMPTY", "US.BAD"] }],
+      }),
     }),
   );
   const res = await app(new Request("http://x/api/market/heatmap"));
@@ -83,6 +95,8 @@ test("GET /api/market/heatmap computes rows per stored group and degrades bad sy
   expect(body.groups).toHaveLength(1);
   const rows = body.groups[0].rows;
   expect(rows.map((r: any) => r.symbol)).toEqual(["US.OK", "US.EMPTY", "US.BAD"]);
+  expect(rows[0].label).toBe("Okay Industries"); // the stored industry label rides along per row
+  expect(rows[1].label).toBeNull();
   expect(rows[0].last).toBe(110);
   expect(rows[0].dayPct).toBeCloseTo(0.1, 10);
   expect(rows[1].last).toBeNull();

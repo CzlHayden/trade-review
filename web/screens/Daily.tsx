@@ -1,12 +1,14 @@
-import { useState, type CSSProperties } from "react";
-import { useHeatmap, usePutHeatmapGroups } from "../lib/hooks";
-import type { HeatmapRow } from "../lib/api";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useDay, useHeatmap, usePutDay, usePutHeatmapGroups } from "../lib/hooks";
+import type { HeatmapGroupRows, HeatmapRow, MarketRegime } from "../lib/api";
 import { dateTime } from "../lib/format";
+import { dayKeyOf } from "../../src/domain/time";
 
 // Per-column heat scale: the |value| at which the cell tint saturates. Tuned per horizon so a ±1%
 // day reads as loud as a ±10% YTD (their natural magnitudes differ by an order of magnitude).
 const SCALE = { day: 0.03, p5d: 0.06, off52w: 0.25, ytd: 0.3 };
 const SYMBOL_RE = /^[A-Z]{2,6}\.[A-Z0-9.\-]{1,15}$/; // mirrors the server's validation
+const REGIMES: MarketRegime[] = ["UPTREND", "CHOP", "DOWNTREND"];
 
 /** Signed percent, 2dp — the sheet-style reading ("+1.38%", "−4.03%"). */
 function spct(v: number | null): string {
@@ -35,41 +37,83 @@ function normalizeSymbol(raw: string): string {
   return s.includes(".") && /^[A-Z]{2,6}\./.test(s) ? s : `US.${s}`;
 }
 
+/** The label cell: plain text normally; in edit mode an input that commits on Enter/blur, so the
+ * industry beside a ticker can be renamed in place (keyed by symbol+label to reset after a save). */
+function LabelCell({ row, editing, onLabel }: { row: HeatmapRow; editing: boolean; onLabel: (label: string) => void }) {
+  if (!editing) return <td className="muted">{row.label ?? ""}</td>;
+  return (
+    <td>
+      <input
+        key={`${row.symbol}|${row.label ?? ""}`}
+        className="input"
+        style={{ fontSize: 12, padding: "1px 6px", width: "100%", minWidth: 90 }}
+        defaultValue={row.label ?? ""}
+        placeholder="industry…"
+        onBlur={(e) => {
+          if (e.target.value.trim() !== (row.label ?? "")) onLabel(e.target.value.trim());
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        }}
+      />
+    </td>
+  );
+}
+
 function GroupTable({
   name,
   rows,
   editing,
   onRemove,
   onAdd,
+  onLabel,
 }: {
   name: string;
   rows: HeatmapRow[];
-  editing: boolean;
-  onRemove: (symbol: string) => void;
-  onAdd: (symbol: string) => void;
+  editing: boolean; // false for a frozen snapshot (read-only) and while not in Edit lists
+  onRemove?: (symbol: string) => void;
+  onAdd?: (symbol: string, label: string | null) => void;
+  onLabel?: (symbol: string, label: string) => void;
 }) {
-  const [draft, setDraft] = useState("");
-  const draftBad = draft.trim() !== "" && !SYMBOL_RE.test(normalizeSymbol(draft));
+  const [draftSym, setDraftSym] = useState("");
+  const [draftLabel, setDraftLabel] = useState("");
+  const draftBad = draftSym.trim() !== "" && !SYMBOL_RE.test(normalizeSymbol(draftSym));
   const commit = () => {
-    if (draft.trim() === "" || draftBad) return;
-    onAdd(normalizeSymbol(draft));
-    setDraft("");
+    if (draftSym.trim() === "" || draftBad || !onAdd) return;
+    onAdd(normalizeSymbol(draftSym), draftLabel.trim() || null);
+    setDraftSym("");
+    setDraftLabel("");
   };
   return (
     <div>
-      <div className="section-title" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div className="section-title" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         {name}
-        {editing && (
-          <input
-            className="input"
-            style={{ fontSize: 12, padding: "2px 8px", width: 120, borderColor: draftBad ? "var(--neg)" : undefined }}
-            placeholder="add: XLK, US.SPY…"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commit();
-            }}
-          />
+        {editing && onAdd && (
+          <>
+            <input
+              className="input"
+              style={{ fontSize: 12, padding: "2px 8px", width: 90, borderColor: draftBad ? "var(--neg)" : undefined }}
+              placeholder="ticker"
+              value={draftSym}
+              onChange={(e) => setDraftSym(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commit();
+              }}
+            />
+            <input
+              className="input"
+              style={{ fontSize: 12, padding: "2px 8px", width: 140 }}
+              placeholder="industry (optional)"
+              value={draftLabel}
+              onChange={(e) => setDraftLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commit();
+              }}
+            />
+            <button className="btn" style={{ padding: "2px 8px", fontSize: 11 }} disabled={draftSym.trim() === "" || draftBad} onClick={commit}>
+              + Add
+            </button>
+          </>
         )}
       </div>
       <div className="table-wrap">
@@ -77,6 +121,7 @@ function GroupTable({
           <thead>
             <tr>
               <th>Symbol</th>
+              <th>Industry</th>
               <th className="right">Last</th>
               <th className="right" title="Latest close vs the previous session's close">% Day</th>
               <th className="right" title="Latest close vs the close 5 sessions earlier">% 5D</th>
@@ -89,7 +134,7 @@ function GroupTable({
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={6} className="empty">
+                <td colSpan={7} className="empty">
                   No symbols — use Edit lists to add some.
                 </td>
               </tr>
@@ -103,7 +148,7 @@ function GroupTable({
                       no data
                     </span>
                   )}
-                  {editing && (
+                  {editing && onRemove && (
                     <button
                       type="button"
                       className="btn btn-icon"
@@ -115,6 +160,7 @@ function GroupTable({
                     </button>
                   )}
                 </td>
+                <LabelCell row={r} editing={editing && !!onLabel} onLabel={(l) => onLabel?.(r.symbol, l)} />
                 <td className="right num">{r.last !== null ? r.last.toFixed(2) : "—"}</td>
                 <td className="right num" style={heat(r.dayPct, SCALE.day)}>{spct(r.dayPct)}</td>
                 <td className="right num" style={heat(r.p5dPct, SCALE.p5d)}>{spct(r.p5dPct)}</td>
@@ -129,87 +175,223 @@ function GroupTable({
   );
 }
 
-/** Daily market page: sheet-style performance heatmap for the user's ETF/sector groups (daily candles
- * from the same cached source the trade charts use). "Edit lists" toggles add/remove; every change
- * saves immediately and refetches the grid. */
+/** Daily page: pick a day (← / →, like the weekly journal), write your market view for it, and see
+ * that day's sector/index heatmap — LIVE for today (editable lists), FROZEN from the saved snapshot
+ * for any past day ("Save day" on the day is what freezes it). */
 export function Daily() {
-  const { data, isLoading, isFetching, refetch, isError } = useHeatmap();
-  const put = usePutHeatmapGroups();
-  const [editing, setEditing] = useState(false);
-  const [newGroup, setNewGroup] = useState("");
-
-  if (isLoading) return <div className="spinner">Loading market data…</div>;
-  if (isError || !data) return <div className="empty card">Couldn't load market data — check your connection and retry.</div>;
-
-  // The heatmap response carries the full group composition, so edits derive the next groups payload
-  // straight from what's on screen — no second query to keep in sync.
-  const groups = data.groups.map((g) => ({ name: g.name, symbols: g.rows.map((r) => r.symbol) }));
-
-  const removeSymbol = (gi: number, symbol: string) =>
-    put.mutate(groups.map((g, i) => (i === gi ? { ...g, symbols: g.symbols.filter((s) => s !== symbol) } : g)));
-  const addSymbol = (gi: number, symbol: string) =>
-    put.mutate(groups.map((g, i) => (i === gi && !g.symbols.includes(symbol) ? { ...g, symbols: [...g.symbols, symbol] } : g)));
-  const addGroup = () => {
-    const name = newGroup.trim();
-    if (!name || groups.some((g) => g.name === name)) return;
-    setNewGroup("");
-    put.mutate([...groups, { name, symbols: [] }]);
-  };
-  // Deleting a whole list of tickers by mis-click would be painful — only an EMPTY group is removable.
-  const removeGroup = (gi: number) => {
-    if (groups[gi]!.symbols.length > 0) return;
-    put.mutate(groups.filter((_, i) => i !== gi));
-  };
+  const [ref, setRef] = useState(() => new Date());
+  const key = dayKeyOf(ref.getTime());
+  const isToday = key === dayKeyOf(Date.now());
+  const shift = (days: number) => setRef((d) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + days));
+  const label = ref.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
 
   return (
     <div>
-      <div className="toolbar" style={{ marginBottom: 4, gap: 8, alignItems: "center" }}>
-        <button className="btn" disabled={isFetching} onClick={() => refetch()}>
-          {isFetching ? "Refreshing…" : "Refresh"}
+      <div className="toolbar" style={{ marginBottom: 14 }}>
+        <button className="btn" onClick={() => shift(-1)}>
+          ← Prev
         </button>
-        <button className={`btn${editing ? " btn-primary" : ""}`} onClick={() => setEditing((e) => !e)}>
-          {editing ? "Done editing" : "Edit lists"}
+        <div style={{ fontWeight: 600, minWidth: 190, textAlign: "center" }}>
+          {label} {isToday && <span className="faint">· today</span>}
+        </div>
+        <button className="btn" onClick={() => shift(1)}>
+          Next →
         </button>
-        <span className="faint" style={{ fontSize: 12 }}>
-          as of {dateTime(data.asOf)} · daily closes from the public candle source
-        </span>
-        {put.isError && <span className="neg" style={{ fontSize: 12 }}>Save failed</span>}
+        {!isToday && (
+          <button className="btn" onClick={() => setRef(new Date())}>
+            Today
+          </button>
+        )}
       </div>
+      <DayBody key={key} dayKey={key} isToday={isToday} />
+    </div>
+  );
+}
 
-      {data.groups.map((g, gi) => (
-        <div key={g.name}>
-          <GroupTable
-            name={g.name}
-            rows={g.rows}
-            editing={editing}
-            onRemove={(s) => removeSymbol(gi, s)}
-            onAdd={(s) => addSymbol(gi, s)}
-          />
-          {editing && g.rows.length === 0 && (
-            <button className="btn" style={{ marginTop: 6, fontSize: 11 }} onClick={() => removeGroup(gi)}>
-              Remove empty group
-            </button>
+function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
+  const day = useDay(dayKey);
+  const save = usePutDay(dayKey);
+  // Live market data only matters for TODAY — a past day renders its frozen snapshot, so don't spend
+  // ~30 candle fetches on it.
+  const heatQ = useHeatmap(isToday);
+  const putGroups = usePutHeatmapGroups();
+  const [editing, setEditing] = useState(false);
+  const [newGroup, setNewGroup] = useState("");
+  const [regime, setRegime] = useState<MarketRegime | null>(null);
+  const [marketRead, setMarketRead] = useState("");
+  const [notes, setNotes] = useState("");
+
+  // Seed the form ONCE per mounted day (DayBody remounts via key={dayKey}) — same pattern as the
+  // weekly journal, so a background refetch can't clobber unsaved typing.
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (!day.data || seeded.current) return;
+    seeded.current = true;
+    setRegime(day.data.regime);
+    setMarketRead(day.data.marketRead ?? "");
+    setNotes(day.data.notes ?? "");
+  }, [day.data]);
+
+  if (day.isLoading) return <div className="spinner">Loading…</div>;
+
+  const submit = () =>
+    save.mutate({
+      regime,
+      marketRead: marketRead || null,
+      notes: notes || null,
+      // Today's save freezes the market picture as it's shown right now; past days never send one
+      // (and the server would refuse it anyway — history stays history).
+      ...(isToday && heatQ.data ? { snapshot: heatQ.data } : {}),
+    });
+
+  // Live-mode edits derive the next groups payload straight from what's on screen.
+  const liveGroups = (heatQ.data?.groups ?? []).map((g) => ({
+    name: g.name,
+    symbols: g.rows.map((r) => ({ symbol: r.symbol, label: r.label })),
+  }));
+  const removeSymbol = (gi: number, symbol: string) =>
+    putGroups.mutate(liveGroups.map((g, i) => (i === gi ? { ...g, symbols: g.symbols.filter((s) => s.symbol !== symbol) } : g)));
+  const addSymbol = (gi: number, symbol: string, lbl: string | null) =>
+    putGroups.mutate(
+      liveGroups.map((g, i) =>
+        i === gi && !g.symbols.some((s) => s.symbol === symbol) ? { ...g, symbols: [...g.symbols, { symbol, label: lbl }] } : g,
+      ),
+    );
+  const setLabel = (gi: number, symbol: string, lbl: string) =>
+    putGroups.mutate(
+      liveGroups.map((g, i) =>
+        i === gi ? { ...g, symbols: g.symbols.map((s) => (s.symbol === symbol ? { ...s, label: lbl || null } : s)) } : g,
+      ),
+    );
+  const addGroup = () => {
+    const name = newGroup.trim();
+    if (!name || liveGroups.some((g) => g.name === name)) return;
+    setNewGroup("");
+    putGroups.mutate([...liveGroups, { name, symbols: [] }]);
+  };
+  // Deleting a whole list of tickers by mis-click would be painful — only an EMPTY group is removable.
+  const removeGroup = (gi: number) => {
+    if (liveGroups[gi]!.symbols.length > 0) return;
+    putGroups.mutate(liveGroups.filter((_, i) => i !== gi));
+  };
+
+  const snapshotGroups: HeatmapGroupRows[] | null = day.data?.snapshot?.groups ?? null;
+
+  return (
+    <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.7fr)", alignItems: "start" }}>
+      <div className="card" style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+        <div>
+          <label className="kpi-label">Market regime</label>
+          <div style={{ display: "flex", gap: 4, marginTop: 3 }}>
+            {REGIMES.map((r) => (
+              <button
+                key={r}
+                type="button"
+                className={`btn${regime === r ? " btn-primary" : ""}`}
+                style={{ padding: "3px 10px", fontSize: 12 }}
+                onClick={() => setRegime(regime === r ? null : r)}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label className="kpi-label">Market view</label>
+          <textarea className="input" style={{ width: "100%", minHeight: 120, marginTop: 3, resize: "vertical" }}
+            value={marketRead} onChange={(e) => setMarketRead(e.target.value)}
+            placeholder="How do you read the market today? Trend, leaders, what would change your mind…" />
+        </div>
+        <div>
+          <label className="kpi-label">Session notes</label>
+          <textarea className="input" style={{ width: "100%", minHeight: 90, marginTop: 3, resize: "vertical" }}
+            value={notes} onChange={(e) => setNotes(e.target.value)}
+            placeholder="Execution, emotions, what to do differently tomorrow…" />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <button className="btn btn-primary" disabled={save.isPending} onClick={submit}>
+            {save.isPending ? "Saving…" : "Save day"}
+          </button>
+          {save.isSuccess && !save.isPending && <span className="pos" style={{ fontSize: 12 }}>Saved ✓</span>}
+          {save.isError && <span className="neg" style={{ fontSize: 12 }}>Save failed</span>}
+          {isToday && (
+            <span className="faint" style={{ fontSize: 11 }}>
+              Saving also freezes today's sector table for later review.
+            </span>
           )}
         </div>
-      ))}
+      </div>
 
-      {editing && (
-        <div style={{ display: "flex", gap: 6, marginTop: 16, alignItems: "center" }}>
-          <input
-            className="input"
-            style={{ fontSize: 12, padding: "3px 8px", width: 180 }}
-            placeholder="new group name"
-            value={newGroup}
-            onChange={(e) => setNewGroup(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") addGroup();
-            }}
-          />
-          <button className="btn" onClick={addGroup} disabled={!newGroup.trim()}>
-            + Add group
-          </button>
-        </div>
-      )}
+      <div>
+        {isToday ? (
+          <>
+            <div className="toolbar" style={{ marginBottom: 4, gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button className="btn" disabled={heatQ.isFetching} onClick={() => heatQ.refetch()}>
+                {heatQ.isFetching ? "Refreshing…" : "Refresh"}
+              </button>
+              <button className={`btn${editing ? " btn-primary" : ""}`} onClick={() => setEditing((e) => !e)}>
+                {editing ? "Done editing" : "Edit lists"}
+              </button>
+              {heatQ.data && (
+                <span className="faint" style={{ fontSize: 12 }}>
+                  as of {dateTime(heatQ.data.asOf)} · daily closes from the public candle source
+                </span>
+              )}
+              {putGroups.isError && <span className="neg" style={{ fontSize: 12 }}>Save failed</span>}
+            </div>
+            {heatQ.isLoading && <div className="spinner">Loading market data…</div>}
+            {heatQ.isError && <div className="empty card">Couldn't load market data — check your connection and retry.</div>}
+            {(heatQ.data?.groups ?? []).map((g, gi) => (
+              <div key={g.name}>
+                <GroupTable
+                  name={g.name}
+                  rows={g.rows}
+                  editing={editing}
+                  onRemove={(s) => removeSymbol(gi, s)}
+                  onAdd={(s, l) => addSymbol(gi, s, l)}
+                  onLabel={(s, l) => setLabel(gi, s, l)}
+                />
+                {editing && g.rows.length === 0 && (
+                  <button className="btn" style={{ marginTop: 6, fontSize: 11 }} onClick={() => removeGroup(gi)}>
+                    Remove empty group
+                  </button>
+                )}
+              </div>
+            ))}
+            {editing && (
+              <div style={{ display: "flex", gap: 6, marginTop: 16, alignItems: "center" }}>
+                <input
+                  className="input"
+                  style={{ fontSize: 12, padding: "3px 8px", width: 180 }}
+                  placeholder="new group name"
+                  value={newGroup}
+                  onChange={(e) => setNewGroup(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") addGroup();
+                  }}
+                />
+                <button className="btn" onClick={addGroup} disabled={!newGroup.trim()}>
+                  + Add group
+                </button>
+              </div>
+            )}
+          </>
+        ) : snapshotGroups ? (
+          <>
+            <div className="faint" style={{ fontSize: 12, marginBottom: 4 }}>
+              Frozen snapshot · saved {day.data?.snapshotAt ? dateTime(day.data.snapshotAt) : "—"}
+            </div>
+            {snapshotGroups.map((g) => (
+              <GroupTable key={g.name} name={g.name} rows={g.rows} editing={false} />
+            ))}
+          </>
+        ) : (
+          <div className="empty card">
+            No market snapshot was saved for this day. Open the Daily page on the day and press "Save
+            day" to freeze that day's sector table.
+          </div>
+        )}
+      </div>
     </div>
   );
 }
