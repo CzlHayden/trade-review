@@ -235,6 +235,7 @@ export async function rebuildDerived(
   const prior = new Map(allTrades(db).map((t) => [t.id, t] as const));
 
   const allFills = allRawFills(db);
+  const fillsById = new Map(allFills.map((f) => [f.id, f] as const));
   const allOrders = allRawOrders(db);
   const manual = manualStops(db); // trade id → user-entered stop (authoritative over inference)
   // Seed positions that predate our data window (reconciled against the current snapshot) so a
@@ -283,19 +284,32 @@ export async function rebuildDerived(
     } catch {
       bars = []; // a candle-source rejection must not abort the whole sync (contract: degrade to no MAE/MFE)
     }
-    const excursion = computeExcursion(t, bars, resMs);
-    // Degrade safely: if candles are unavailable this run, keep any excursion computed on a prior
-    // sync rather than nulling it (which would silently drop mae/mfe-dependent flags). But ONLY when
-    // the trade's window/shape is unchanged — a trade whose id persisted while it gained fills (e.g.
-    // open → closed, or scaled) has a different window, so the old excursion would be stale.
+    const tradeFills = t.fillIds.map((id) => fillsById.get(id)).filter((f) => f !== undefined);
+    const excursion = computeExcursion(t, tradeFills, bars, resMs);
+    // Degrade safely: if candles are unavailable this run, keep any excursion computed on a prior sync
+    // rather than nulling it (which would silently drop mae/mfe-dependent flags). But ONLY when the
+    // excursion INPUTS are unchanged. Those inputs are the fills — they fix the window [openTime,
+    // closeTime], the avgEntry reference, and the price anchors (min/max fill price). We guard on both:
+    //   - the fill-ID SET, so a gained/removed fill (open → closed, scale-in/out, a partial exit that
+    //     leaves the trade open — none of which need move avgEntry/maxQty) forces a recompute; and
+    //   - the derived window/size aggregates, so a raw fill CORRECTED in place (upsertRawFills reuses
+    //     the ID but may change price/qty/time) is caught even though the ID set is identical.
+    // Residual (accepted): an in-place correction that preserves avgEntry/avgExit yet moves the min/max
+    // fill price (e.g. 15/5 → 20/0) during a candle outage would still carry a stale excursion. It needs
+    // FUTU to re-send a corrected fill exactly as candles are down, and self-heals on the next candle
+    // sync — not worth persisting a fill-price signature to close. See PR #38 follow-up.
     const priorT = prior.get(t.id);
-    const sameShape =
+    const sameInputs =
       priorT !== undefined &&
+      priorT.openTime === t.openTime &&
       priorT.closeTime === t.closeTime &&
       priorT.avgEntry === t.avgEntry &&
-      priorT.maxQty === t.maxQty;
-    const mae = excursion.mae ?? (sameShape ? priorT.mae : null);
-    const mfe = excursion.mfe ?? (sameShape ? priorT.mfe : null);
+      priorT.avgExit === t.avgExit &&
+      priorT.maxQty === t.maxQty &&
+      priorT.fillIds.length === t.fillIds.length &&
+      priorT.fillIds.every((id, i) => id === t.fillIds[i]);
+    const mae = excursion.mae ?? (sameInputs ? priorT.mae : null);
+    const mfe = excursion.mfe ?? (sameInputs ? priorT.mfe : null);
 
     const enriched: Trade = {
       ...t,
