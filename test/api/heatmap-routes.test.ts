@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "../../src/store/migrations";
 import { buildApi } from "../../src/api/routes";
 import { DEFAULT_RULE_CONFIG, type Candle } from "../../src/domain/types";
-import { DEFAULT_HEATMAP_GROUPS } from "../../src/store/config";
+import { DEFAULT_HEATMAP_GROUPS, DEFAULT_THEMATIC_UNIVERSE } from "../../src/store/config";
 
 const DAY = 86_400_000;
 const NOW = Date.UTC(2026, 6, 17);
@@ -83,10 +83,56 @@ test("DELETE /api/market/symbols resets to the built-in defaults (labels, EW gro
   expect(res.status).toBe(200);
   const body: any = await res.json();
   expect(body.groups).toEqual(DEFAULT_HEATMAP_GROUPS);
-  // and the EW group sits directly after the cap-weighted sectors, before Thematic
+  // and the EW group sits directly after the cap-weighted sectors
   const names = body.groups.map((g: any) => g.name);
   expect(names.indexOf("S&P EW sectors")).toBe(names.indexOf("S&P sectors") + 1);
-  expect(names.indexOf("S&P EW sectors")).toBeLessThan(names.indexOf("Thematic"));
+});
+
+test("reset also restores the default thematic universe", async () => {
+  const { app } = harness(async () => []);
+  await app(
+    new Request("http://x/api/market/thematic", { method: "PUT", body: JSON.stringify({ symbols: ["US.SMH"] }) }),
+  );
+  await app(new Request("http://x/api/market/symbols", { method: "DELETE" }));
+  const body: any = await (await app(new Request("http://x/api/market/thematic"))).json();
+  expect(body.symbols).toEqual(DEFAULT_THEMATIC_UNIVERSE);
+});
+
+test("heatmap ranks the thematic universe by 5-day change desc, no-data last", async () => {
+  const DAY = 86_400_000;
+  const series = (lastClose: number): Candle[] =>
+    Array.from({ length: 7 }, (_, i) => {
+      const close = i === 6 ? lastClose : 100;
+      return { time: NOW - (6 - i) * DAY, open: close, high: close, low: close, close, volume: 0 };
+    });
+  const { app } = harness(async (symbol) => {
+    if (symbol === "US.HOT") return series(150); // +50% over 5 sessions
+    if (symbol === "US.MID") return series(120); // +20%
+    return []; // US.NONE → no data → sinks to the bottom
+  });
+  await app(
+    new Request("http://x/api/market/thematic", {
+      method: "PUT",
+      body: JSON.stringify({ symbols: ["US.NONE", { symbol: "US.MID", label: "Mid" }, "US.HOT"] }),
+    }),
+  );
+  const body: any = await (await app(new Request("http://x/api/market/heatmap"))).json();
+  expect(body.thematic.rankedBy).toBe("p5dPct");
+  expect(body.thematic.topN).toBe(10);
+  expect(body.thematic.universeSize).toBe(3);
+  expect(body.thematic.rows.map((r: any) => r.symbol)).toEqual(["US.HOT", "US.MID", "US.NONE"]);
+  expect(body.thematic.rows[0].p5dPct).toBeCloseTo(0.5, 10);
+  expect(body.thematic.rows[1].label).toBe("Mid");
+  expect(body.thematic.rows[2].p5dPct).toBeNull();
+});
+
+test("PUT /api/market/thematic validates entries", async () => {
+  const { app } = harness(async () => []);
+  const bad = async (symbols: unknown) =>
+    (await app(new Request("http://x/api/market/thematic", { method: "PUT", body: JSON.stringify({ symbols }) }))).status;
+  expect(await bad(["SPY"])).toBe(400); // missing market prefix
+  expect(await bad("nope")).toBe(400);
+  expect(await bad(Array.from({ length: 81 }, (_, i) => `US.S${i}`))).toBe(400); // > 80
 });
 
 test("PUT /api/market/symbols rejects malformed symbols and oversized bodies", async () => {

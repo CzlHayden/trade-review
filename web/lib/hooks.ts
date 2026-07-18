@@ -84,6 +84,15 @@ export function usePutHeatmapGroups() {
   });
 }
 
+/** Edit the thematic ranking universe (the candidate list behind "Top 10 thematic"). */
+export function usePutThematic() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (symbols: Array<{ symbol: string; label: string | null }>) => api.putThematic(symbols),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["heatmap"] }),
+  });
+}
+
 /** "Reset to defaults": drops the stored group config so the app's built-in lists (with industry
  * labels and the EW sector group) apply again. */
 export function useResetHeatmapGroups() {

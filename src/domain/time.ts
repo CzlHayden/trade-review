@@ -68,6 +68,16 @@ export function isValidDayKey(key: string): boolean {
   return dayKeyOf(d.getTime()) === key;
 }
 
+/** [start, end) epoch-ms for a day key: local midnight to the next local midnight. Advances with
+ * setDate (like weekRange) so a DST edge still lands both boundaries on local midnight. */
+export function dayRange(dayKey: string): { start: number; end: number } {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey)!;
+  const startDate = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const endDate = new Date(startDate);
+  endDate.setDate(endDate.getDate() + 1);
+  return { start: startDate.getTime(), end: endDate.getTime() };
+}
+
 /** Hold-time bucket for the "by hold-time" breakdown. The documented, gapless contract is
  * `intraday` (<1d), `2-5d` (1d–<6d), `1-2w` (6d–<15d), `2w+` (≥15d), `open` (still-open). */
 export function holdBucket(holdSeconds: number | null): string {

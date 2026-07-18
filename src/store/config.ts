@@ -154,26 +154,80 @@ export const DEFAULT_HEATMAP_GROUPS: HeatmapGroup[] = [
     ["US.RSPU", "EW Utilities"],
     ["US.RSPR", "EW Real Estate"],
   ]),
-  g("Thematic", [
-    ["US.SMH", "Semiconductors"],
-    ["US.KWEB", "China Internet"],
-    ["US.XOP", "Oil & Gas Exploration"],
-    ["US.KRE", "Regional Banks"],
-    ["US.GLD", "Gold"],
-    ["US.USO", "Oil (WTI)"],
-    ["US.TLT", "20+ yr Treasuries"],
-    ["US.FXI", "China Large-Cap"],
-    ["US.IYR", "US Real Estate"],
-  ]),
 ];
 
-/** Known industry labels from the default groups, used to BACKFILL a stored entry whose label is
- * null — a config written before labels existed (or a ticker re-added without one) shows the right
- * industry automatically. The trade-off: clearing the label of one of these tickers re-fills it on
- * the next read; acceptable, since the label is freely editable to anything non-empty. */
-const DEFAULT_LABELS: ReadonlyMap<string, string> = new Map(
-  DEFAULT_HEATMAP_GROUPS.flatMap((grp) => grp.symbols.map((s) => [s.symbol, s.label as string])),
-);
+// ---- Thematic universe (the auto-ranked "Top 10 thematic") ---------------------
+// A WIDE candidate list, not a display list: the heatmap endpoint ranks the whole universe by 5-day
+// % change every load and surfaces the top 10 — so the leaders rotate in by themselves each day.
+// User-editable like the groups (add/remove/label); stored under its own key.
+
+const THEMATIC_KEY = "thematic_universe";
+
+export const DEFAULT_THEMATIC_UNIVERSE: HeatmapSymbol[] = [
+  ["US.SMH", "Semiconductors"],
+  ["US.IGV", "Software"],
+  ["US.HACK", "Cybersecurity"],
+  ["US.ARKK", "Innovation"],
+  ["US.IBB", "Biotech"],
+  ["US.XBI", "Biotech (equal weight)"],
+  ["US.ITA", "Aerospace & Defense"],
+  ["US.JETS", "Airlines"],
+  ["US.ITB", "Home Construction"],
+  ["US.XRT", "Retail"],
+  ["US.KRE", "Regional Banks"],
+  ["US.KBE", "Banks"],
+  ["US.KWEB", "China Internet"],
+  ["US.FXI", "China Large-Cap"],
+  ["US.EEM", "Emerging Markets"],
+  ["US.XOP", "Oil & Gas Exploration"],
+  ["US.OIH", "Oil Services"],
+  ["US.USO", "Oil (WTI)"],
+  ["US.UNG", "Natural Gas"],
+  ["US.XME", "Metals & Mining"],
+  ["US.GDX", "Gold Miners"],
+  ["US.GLD", "Gold"],
+  ["US.SLV", "Silver"],
+  ["US.COPX", "Copper Miners"],
+  ["US.URA", "Uranium"],
+  ["US.TAN", "Solar"],
+  ["US.LIT", "Lithium & Battery"],
+  ["US.DBA", "Agriculture"],
+  ["US.WEAT", "Wheat"],
+  ["US.DBC", "Commodities Index"],
+  ["US.IXC", "Global Energy"],
+  ["US.IYR", "US Real Estate"],
+  ["US.TLT", "20+ yr Treasuries"],
+  ["US.BITO", "Bitcoin Futures"],
+].map(([symbol, label]) => ({ symbol: symbol as string, label: label as string }));
+
+/** Known industry labels from the default groups AND the thematic universe, used to BACKFILL a
+ * stored entry whose label is null — a config written before labels existed (or a ticker re-added
+ * without one) shows the right industry automatically. The trade-off: clearing the label of one of
+ * these tickers re-fills it on the next read; acceptable, since it's freely editable to anything. */
+const DEFAULT_LABELS: ReadonlyMap<string, string> = new Map([
+  ...DEFAULT_HEATMAP_GROUPS.flatMap((grp) =>
+    grp.symbols.map((s) => [s.symbol, s.label as string] as [string, string]),
+  ),
+  ...DEFAULT_THEMATIC_UNIVERSE.map((s) => [s.symbol, s.label as string] as [string, string]),
+]);
+
+/** Parse a stored/PUT symbol-entry list: strings (legacy, label-less) or {symbol, label} objects.
+ * Backfills known default labels onto label-less entries. Null when malformed. */
+function readEntries(symbols: unknown): HeatmapSymbol[] | null {
+  if (!Array.isArray(symbols)) return null;
+  const entries: HeatmapSymbol[] = [];
+  for (const s of symbols) {
+    let entry: HeatmapSymbol;
+    if (typeof s === "string") entry = { symbol: s, label: null }; // legacy shape
+    else if (s !== null && typeof s === "object" && typeof (s as any).symbol === "string") {
+      const label = (s as any).label;
+      entry = { symbol: (s as any).symbol, label: typeof label === "string" ? label : null };
+    } else return null;
+    if (entry.label === null) entry.label = DEFAULT_LABELS.get(entry.symbol) ?? null;
+    entries.push(entry);
+  }
+  return entries;
+}
 
 /** Read the stored groups; degrade to the defaults on a malformed/legacy row rather than throwing
  * (same self-healing posture as getStoredOpend — the next successful PUT overwrites the bad row).
@@ -194,17 +248,8 @@ export function getHeatmapGroups(db: Database): HeatmapGroup[] {
     if (grp === null || typeof grp !== "object") return DEFAULT_HEATMAP_GROUPS;
     const { name, symbols } = grp as Record<string, unknown>;
     if (typeof name !== "string" || !Array.isArray(symbols)) return DEFAULT_HEATMAP_GROUPS;
-    const entries: HeatmapSymbol[] = [];
-    for (const s of symbols) {
-      let entry: HeatmapSymbol;
-      if (typeof s === "string") entry = { symbol: s, label: null }; // legacy shape
-      else if (s !== null && typeof s === "object" && typeof (s as any).symbol === "string") {
-        const label = (s as any).label;
-        entry = { symbol: (s as any).symbol, label: typeof label === "string" ? label : null };
-      } else return DEFAULT_HEATMAP_GROUPS;
-      if (entry.label === null) entry.label = DEFAULT_LABELS.get(entry.symbol) ?? null;
-      entries.push(entry);
-    }
+    const entries = readEntries(symbols);
+    if (entries === null) return DEFAULT_HEATMAP_GROUPS;
     groups.push({ name, symbols: entries });
   }
   return groups;
@@ -213,6 +258,26 @@ export function getHeatmapGroups(db: Database): HeatmapGroup[] {
 /** Drop the stored groups so the (current) defaults apply again — the "Reset to defaults" button. */
 export function clearHeatmapGroups(db: Database): void {
   db.run(`DELETE FROM config WHERE key = ?`, [HEATMAP_KEY]);
+}
+
+export function getThematicUniverse(db: Database): HeatmapSymbol[] {
+  const raw = getConfigValue(db, THEMATIC_KEY);
+  if (!raw) return DEFAULT_THEMATIC_UNIVERSE;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return DEFAULT_THEMATIC_UNIVERSE;
+  }
+  return readEntries(parsed) ?? DEFAULT_THEMATIC_UNIVERSE;
+}
+
+export function setThematicUniverse(db: Database, entries: HeatmapSymbol[]): void {
+  setConfigValue(db, THEMATIC_KEY, JSON.stringify(entries));
+}
+
+export function clearThematicUniverse(db: Database): void {
+  db.run(`DELETE FROM config WHERE key = ?`, [THEMATIC_KEY]);
 }
 
 export function setHeatmapGroups(db: Database, groups: HeatmapGroup[]): void {

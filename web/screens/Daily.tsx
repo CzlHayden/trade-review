@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { useDay, useHeatmap, usePutDay, usePutHeatmapGroups, useResetHeatmapGroups } from "../lib/hooks";
+import { Link, useLocation } from "wouter";
+import { useDay, useHeatmap, usePutDay, usePutHeatmapGroups, usePutThematic, useResetHeatmapGroups } from "../lib/hooks";
 import type { HeatmapGroupRows, HeatmapRow, MarketRegime } from "../lib/api";
-import { dateTime } from "../lib/format";
+import { date, dateTime, money, rMultiple, signClass } from "../lib/format";
 import { dayKeyOf } from "../../src/domain/time";
 
 // Per-column heat scale: the |value| at which the cell tint saturates. Tuned per horizon so a ±1%
@@ -68,6 +69,7 @@ function GroupTable({
   onAdd,
   onLabel,
   extraHeader,
+  showRank,
 }: {
   name: string;
   rows: HeatmapRow[];
@@ -76,6 +78,7 @@ function GroupTable({
   onAdd?: (symbol: string, label: string | null) => void;
   onLabel?: (symbol: string, label: string) => void;
   extraHeader?: ReactNode; // e.g. the ↑/↓ group-reorder buttons while editing
+  showRank?: boolean; // "#" column for ranked lists (the thematic top-10)
 }) {
   const [draftSym, setDraftSym] = useState("");
   const [draftLabel, setDraftLabel] = useState("");
@@ -123,6 +126,7 @@ function GroupTable({
         <table className="data">
           <thead>
             <tr>
+              {showRank && <th className="right">#</th>}
               <th>Symbol</th>
               <th>Industry</th>
               <th className="right">Last</th>
@@ -137,13 +141,14 @@ function GroupTable({
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="empty">
+                <td colSpan={showRank ? 8 : 7} className="empty">
                   No symbols — use Edit lists to add some.
                 </td>
               </tr>
             )}
-            {rows.map((r) => (
+            {rows.map((r, i) => (
               <tr key={r.symbol}>
+                {showRank && <td className="right muted num">{i + 1}</td>}
                 <td className="mono">
                   {displaySymbol(r.symbol)}
                   {r.last === null && (
@@ -216,8 +221,10 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
   const save = usePutDay(dayKey);
   // Live market data only matters for TODAY — a past day renders its frozen snapshot, so don't spend
   // ~30 candle fetches on it.
+  const [, navigate] = useLocation();
   const heatQ = useHeatmap(isToday);
   const putGroups = usePutHeatmapGroups();
+  const putThematic = usePutThematic();
   const resetGroups = useResetHeatmapGroups();
   const [editing, setEditing] = useState(false);
   const [newGroup, setNewGroup] = useState("");
@@ -291,6 +298,7 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
 
   return (
     <div className="grid" style={{ gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.7fr)", alignItems: "start" }}>
+      <div>
       <div className="card" style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
         <div>
           <label className="kpi-label">Market regime</label>
@@ -328,10 +336,50 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
           {save.isError && <span className="neg" style={{ fontSize: 12 }}>Save failed</span>}
           {isToday && (
             <span className="faint" style={{ fontSize: 11 }}>
-              Saving also freezes today's sector table for later review.
+              Saving also freezes today's sector tables for later review.
             </span>
           )}
         </div>
+      </div>
+
+      {/* The day's trading, right under the day's thinking — thesis vs action on one screen. Same
+          columns + whole-row click as the weekly journal. */}
+      <div className="section-title">Trades this day ({day.data?.trades.length ?? 0})</div>
+      <div className="table-wrap">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Closed</th>
+              <th className="right" title="The trade's full realized P&L at close — a trade closed today may have run over prior days; open trades show —.">
+                Realized P&L
+              </th>
+              <th className="right">R</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(day.data?.trades ?? []).length === 0 && (
+              <tr>
+                <td colSpan={4} className="empty">
+                  No trades opened or closed this day.
+                </td>
+              </tr>
+            )}
+            {(day.data?.trades ?? []).map((t) => (
+              <tr key={t.id} className="clickable" onClick={() => navigate(`/trades/${encodeURIComponent(t.id)}`)}>
+                <td className="mono">
+                  <Link href={`/trades/${encodeURIComponent(t.id)}`}>{t.symbol}</Link>
+                </td>
+                <td className="muted num">{t.closeTime ? date(t.closeTime) : <span className="faint">open</span>}</td>
+                <td className={`right num ${signClass(t.realizedPnl)}`}>
+                  {t.realizedPnl !== null ? money(t.realizedPnl, t.currency) : "—"}
+                </td>
+                <td className={`right num ${signClass(t.rMultiple)}`}>{rMultiple(t.rMultiple)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       </div>
 
       <div>
@@ -418,6 +466,35 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
                 </button>
               </div>
             )}
+            {heatQ.data?.thematic &&
+              (() => {
+                const th = heatQ.data.thematic;
+                // Display: the top N. Edit mode: the WHOLE ranked universe, so you can see what's
+                // just outside the cut and prune/label the candidate list itself.
+                const rows = editing ? th.rows : th.rows.slice(0, th.topN);
+                const entries = th.rows.map((r) => ({ symbol: r.symbol, label: r.label }));
+                return (
+                  <GroupTable
+                    name={editing ? `Thematic universe (${th.universeSize} tracked)` : `Top ${th.topN} thematic`}
+                    rows={rows}
+                    editing={editing}
+                    showRank
+                    onRemove={(s) => putThematic.mutate(entries.filter((e) => e.symbol !== s))}
+                    onAdd={(s, l) => {
+                      if (!entries.some((e) => e.symbol === s)) putThematic.mutate([...entries, { symbol: s, label: l }]);
+                    }}
+                    onLabel={(s, l) =>
+                      putThematic.mutate(entries.map((e) => (e.symbol === s ? { ...e, label: l || null } : e)))
+                    }
+                    extraHeader={
+                      <span className="faint" style={{ fontSize: 11, fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
+                        ranked by 5-day % change · re-sorts itself daily
+                        {editing ? " · top 10 shown outside editing" : ` · tracking ${th.universeSize}`}
+                      </span>
+                    }
+                  />
+                );
+              })()}
           </>
         ) : snapshotGroups ? (
           <>
@@ -427,6 +504,14 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
             {snapshotGroups.map((g) => (
               <GroupTable key={g.name} name={g.name} rows={g.rows} editing={false} />
             ))}
+            {day.data?.snapshot?.thematic && (
+              <GroupTable
+                name={`Top ${day.data.snapshot.thematic.topN} thematic`}
+                rows={day.data.snapshot.thematic.rows.slice(0, day.data.snapshot.thematic.topN)}
+                editing={false}
+                showRank
+              />
+            )}
           </>
         ) : (
           <div className="empty card">

@@ -58,9 +58,18 @@ export interface HeatmapGroupRows {
   name: string;
   rows: HeatmapRow[];
 }
+/** The auto-ranked thematic list: the FULL universe sorted by 5-day % change (descending, no-data
+ * last). Display slices the top N; edit mode shows the whole thing. */
+export interface ThematicRanking {
+  rankedBy: "p5dPct";
+  topN: number;
+  universeSize: number;
+  rows: HeatmapRow[];
+}
 export interface HeatmapResponse {
   asOf: number;
   groups: HeatmapGroupRows[];
+  thematic?: ThematicRanking; // optional: snapshots frozen before this feature don't have it
 }
 export interface HeatmapSymbolEntry {
   symbol: string;
@@ -70,9 +79,11 @@ export interface HeatmapGroups {
   groups: Array<{ name: string; symbols: HeatmapSymbolEntry[] }>;
 }
 
-/** Daily journal view: the entry plus its frozen heatmap (null until a today-save captures one). */
+/** Daily journal view: the entry plus its frozen heatmap (null until a today-save captures one) and
+ * the trades opened/closed that local day (associated at read time, like the weekly view). */
 export interface DailyView extends DailyEntry {
   snapshot: HeatmapResponse | null;
+  trades: Trade[];
 }
 
 export interface OpenPosition {
@@ -217,6 +228,8 @@ export const api = {
   putHeatmapGroups: (groups: Array<{ name: string; symbols: HeatmapSymbolEntry[] }>) =>
     send<HeatmapGroups>("/api/market/symbols", "PUT", { groups }),
   resetHeatmapGroups: () => send<HeatmapGroups>("/api/market/symbols", "DELETE"),
+  putThematic: (symbols: HeatmapSymbolEntry[]) =>
+    send<{ symbols: HeatmapSymbolEntry[] }>("/api/market/thematic", "PUT", { symbols }),
   day: (dayKey: string) => get<DailyView>(`/api/journal/days/${dayKey}`),
   putDay: (dayKey: string, body: Record<string, unknown>) =>
     send<DailyView>(`/api/journal/days/${dayKey}`, "PUT", body),

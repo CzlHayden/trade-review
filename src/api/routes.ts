@@ -7,7 +7,7 @@ import type { RuleConfig, Trade } from "../domain/types";
 import { computeStats, breakdown } from "../core/analytics";
 import { type Res, windowFor } from "../core/candle-res";
 import { allTrades, flagsForTrade } from "../store/repos";
-import { dayKeyOf, holdBucket, isValidDayKey, isValidIsoWeek, weekRange } from "../domain/time";
+import { dayKeyOf, dayRange, holdBucket, isValidDayKey, isValidIsoWeek, weekRange } from "../domain/time";
 import type { Journal, MarketRegime, WatchlistItem } from "../domain/journal-types";
 import {
   getDailyEntry,
@@ -25,9 +25,13 @@ import {
   setStoredOpend,
   opendConnection,
   clearHeatmapGroups,
+  clearThematicUniverse,
   getHeatmapGroups,
+  getThematicUniverse,
   setHeatmapGroups,
+  setThematicUniverse,
   type HeatmapGroup,
+  type HeatmapSymbol,
 } from "../store/config";
 import { heatmapMetrics } from "../core/heatmap";
 import type { UpdateStatus } from "./update";
@@ -253,12 +257,36 @@ const HEATMAP_WINDOW_MS = 430 * DAY_MS;
 const HEATMAP_FETCH_CONCURRENCY = 6; // be polite to the free candle source
 const MAX_HEATMAP_GROUPS = 12;
 const MAX_HEATMAP_SYMBOLS = 60; // total across groups — each is a candle fetch
+const MAX_THEMATIC_SYMBOLS = 80; // the thematic ranking universe (candidates, not display rows)
+const THEMATIC_TOP_N = 10;
 const MAX_LABEL_LEN = 40; // industry/name shown beside the ticker
 // Domain symbol: "<MKT>.<code>" (code may itself contain dots/dashes, e.g. US.BRK.B).
 const SYMBOL_RE = /^[A-Z]{2,6}\.[A-Z0-9.\-]{1,15}$/;
 
-/** Validate + normalize a PUT groups body (uppercase symbols, trim names/labels, drop dupes within
- * a group; a plain-string symbol entry is accepted as label-less). Null when invalid — caller 400s. */
+/** Validate + normalize one symbol-entry list (uppercase symbols, trim labels, dedupe — a dupe keeps
+ * the labeled entry; a plain-string entry is accepted as label-less). Null when invalid. */
+function parseSymbolEntries(v: unknown): HeatmapSymbol[] | null {
+  if (!Array.isArray(v)) return null;
+  const seen = new Map<string, string | null>();
+  for (const s of v) {
+    let rawSym: unknown;
+    let rawLabel: unknown = null;
+    if (typeof s === "string") rawSym = s;
+    else if (s !== null && typeof s === "object") {
+      rawSym = (s as any).symbol;
+      rawLabel = (s as any).label ?? null;
+    } else return null;
+    if (typeof rawSym !== "string") return null;
+    const sym = rawSym.trim().toUpperCase();
+    if (!SYMBOL_RE.test(sym)) return null;
+    if (rawLabel !== null && typeof rawLabel !== "string") return null;
+    const label = rawLabel === null ? null : rawLabel.trim().slice(0, MAX_LABEL_LEN) || null;
+    if (!seen.has(sym) || label !== null) seen.set(sym, label);
+  }
+  return [...seen].map(([symbol, label]) => ({ symbol, label }));
+}
+
+/** Validate + normalize a PUT groups body. Null when invalid — caller 400s. */
 function parseHeatmapGroups(v: unknown): HeatmapGroup[] | null {
   if (!Array.isArray(v) || v.length > MAX_HEATMAP_GROUPS) return null;
   const out: HeatmapGroup[] = [];
@@ -266,27 +294,11 @@ function parseHeatmapGroups(v: unknown): HeatmapGroup[] | null {
   for (const g of v) {
     if (g === null || typeof g !== "object") return null;
     const name = (g as any).name;
-    const symbols = (g as any).symbols;
     if (typeof name !== "string" || name.trim() === "" || name.length > 40) return null;
-    if (!Array.isArray(symbols)) return null;
-    const seen = new Map<string, string | null>();
-    for (const s of symbols) {
-      let rawSym: unknown;
-      let rawLabel: unknown = null;
-      if (typeof s === "string") rawSym = s;
-      else if (s !== null && typeof s === "object") {
-        rawSym = (s as any).symbol;
-        rawLabel = (s as any).label ?? null;
-      } else return null;
-      if (typeof rawSym !== "string") return null;
-      const sym = rawSym.trim().toUpperCase();
-      if (!SYMBOL_RE.test(sym)) return null;
-      if (rawLabel !== null && typeof rawLabel !== "string") return null;
-      const label = rawLabel === null ? null : rawLabel.trim().slice(0, MAX_LABEL_LEN) || null;
-      if (!seen.has(sym) || label !== null) seen.set(sym, label); // dupe keeps the labeled entry
-    }
-    total += seen.size;
-    out.push({ name: name.trim(), symbols: [...seen].map(([symbol, label]) => ({ symbol, label })) });
+    const entries = parseSymbolEntries((g as any).symbols);
+    if (entries === null) return null;
+    total += entries.length;
+    out.push({ name: name.trim(), symbols: entries });
   }
   if (total > MAX_HEATMAP_SYMBOLS) return null;
   return out;
@@ -520,8 +532,12 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
       // reload within the cache's tail window costs no network; metrics math is pure core.
       if (seg.length === 3 && seg[1] === "market" && seg[2] === "heatmap" && method === "GET") {
         const groups = getHeatmapGroups(db);
+        const universe = getThematicUniverse(db);
         const now = deps.now();
-        const uniq = [...new Set(groups.flatMap((g) => g.symbols.map((s) => s.symbol)))];
+        // ONE fan-out covers the display groups AND the thematic ranking universe (deduped).
+        const uniq = [
+          ...new Set([...groups.flatMap((g) => g.symbols.map((s) => s.symbol)), ...universe.map((s) => s.symbol)]),
+        ];
         const bySymbol = new Map<string, ReturnType<typeof heatmapMetrics>>();
         // Chunked fan-out: parallel enough to load fast, capped so ~30 symbols don't hammer Yahoo.
         for (let i = 0; i < uniq.length; i += HEATMAP_FETCH_CONCURRENCY) {
@@ -537,19 +553,48 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
             }),
           );
         }
+        // The thematic ranking: FULL universe sorted by 5-day % change, descending — the classic
+        // daily-plan "where is money flowing this week" ordering. No-data symbols sink to the
+        // bottom. The client shows the top N and uses the full ranked list in edit mode; the daily
+        // snapshot freezes whatever ranking the user saw.
+        const thematicRows = universe
+          .map(({ symbol, label }) => ({ symbol, label, ...bySymbol.get(symbol)! }))
+          .sort((a, b) => (b.p5dPct ?? -Infinity) - (a.p5dPct ?? -Infinity) || a.symbol.localeCompare(b.symbol));
         return json({
           asOf: now,
           groups: groups.map((g) => ({
             name: g.name,
             rows: g.symbols.map(({ symbol, label }) => ({ symbol, label, ...bySymbol.get(symbol)! })),
           })),
+          thematic: {
+            rankedBy: "p5dPct",
+            topN: THEMATIC_TOP_N,
+            universeSize: universe.length,
+            rows: thematicRows,
+          },
         });
+      }
+      // /api/market/thematic — the auto-ranked universe's candidate list (GET/PUT).
+      if (seg.length === 3 && seg[1] === "market" && seg[2] === "thematic") {
+        if (method === "GET") return json({ symbols: getThematicUniverse(db) });
+        if (method === "PUT") {
+          const b = await readJsonObject(req);
+          if (!b) return json({ error: "body must be a JSON object" }, 400);
+          const entries = parseSymbolEntries(b.symbols);
+          if (entries === null || entries.length > MAX_THEMATIC_SYMBOLS) {
+            return json({ error: `symbols must be ≤${MAX_THEMATIC_SYMBOLS} entries like US.SMH or {symbol, label}` }, 400);
+          }
+          setThematicUniverse(db, entries);
+          return json({ symbols: getThematicUniverse(db) });
+        }
       }
       if (seg.length === 3 && seg[1] === "market" && seg[2] === "symbols") {
         if (method === "GET") return json({ groups: getHeatmapGroups(db) });
-        // DELETE = reset to defaults (drops the stored config; future default improvements apply too).
+        // DELETE = reset to defaults (drops the stored config — groups AND the thematic universe —
+        // so future default improvements apply too).
         if (method === "DELETE") {
           clearHeatmapGroups(db);
+          clearThematicUniverse(db);
           return json({ groups: getHeatmapGroups(db) });
         }
         if (method === "PUT") {
@@ -690,9 +735,12 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
           });
         }
         if (method === "GET" || method === "PUT") {
+          // Trades opened OR closed that local day, associated at read time (same rule as weeks).
+          const { start, end } = dayRange(dayKey);
+          const trades = tradesInRange(db, start, end);
           const e = getDailyEntry(db, dayKey);
           if (!e) {
-            return json({ id: dayKey, regime: null, marketRead: null, notes: null, snapshot: null, snapshotAt: null, updatedAt: 0 });
+            return json({ id: dayKey, regime: null, marketRead: null, notes: null, snapshot: null, snapshotAt: null, updatedAt: 0, trades });
           }
           // A malformed stored snapshot degrades to null (self-healing on the next today-save).
           let snapshot: unknown = null;
@@ -703,7 +751,7 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
               snapshot = null;
             }
           }
-          return json({ id: e.id, regime: e.regime, marketRead: e.marketRead, notes: e.notes, snapshot, snapshotAt: e.snapshotAt, updatedAt: e.updatedAt });
+          return json({ id: e.id, regime: e.regime, marketRead: e.marketRead, notes: e.notes, snapshot, snapshotAt: e.snapshotAt, updatedAt: e.updatedAt, trades });
         }
       }
 

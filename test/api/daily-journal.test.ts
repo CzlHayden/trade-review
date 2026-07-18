@@ -22,7 +22,25 @@ function harness(now = NOW) {
 test("GET an unwritten day returns an empty default (never 404)", async () => {
   const { get } = harness();
   const e = await get("2026-07-01");
-  expect(e).toEqual({ id: "2026-07-01", regime: null, marketRead: null, notes: null, snapshot: null, snapshotAt: null, updatedAt: 0 });
+  expect(e).toEqual({ id: "2026-07-01", regime: null, marketRead: null, notes: null, snapshot: null, snapshotAt: null, updatedAt: 0, trades: [] });
+});
+
+test("the day view lists trades opened or closed that local day", async () => {
+  const db = new Database(":memory:");
+  runMigrations(db);
+  const { upsertRawFills } = await import("../../src/store/repos");
+  const { rebuildDerived } = await import("../../src/sync/sync");
+  upsertRawFills(db, [
+    { id: "f1", orderId: "o1", symbol: "US.AAPL", side: "BUY", qty: 10, price: 100, fee: 0, currency: "USD", time: NOW - 3_600_000, account: "a" },
+    { id: "f2", orderId: "o2", symbol: "US.AAPL", side: "SELL", qty: 10, price: 110, fee: 0, currency: "USD", time: NOW, account: "a" },
+  ]);
+  await rebuildDerived(db, { candles: { getCandles: async () => [] }, config: DEFAULT_RULE_CONFIG, now: NOW });
+  const app = buildApi(db, { candles: { getCandles: async () => [] }, config: DEFAULT_RULE_CONFIG, sync: null, now: () => NOW });
+  const today: any = await (await app(new Request(`http://x/api/journal/days/${TODAY}`))).json();
+  expect(today.trades).toHaveLength(1);
+  expect(today.trades[0].symbol).toBe("US.AAPL");
+  const other: any = await (await app(new Request("http://x/api/journal/days/2026-01-05"))).json();
+  expect(other.trades).toHaveLength(0);
 });
 
 test("PUT saves regime + texts, and freezes the snapshot only for TODAY", async () => {
