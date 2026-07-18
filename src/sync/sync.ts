@@ -288,14 +288,20 @@ export async function rebuildDerived(
     const excursion = computeExcursion(t, tradeFills, bars, resMs);
     // Degrade safely: if candles are unavailable this run, keep any excursion computed on a prior sync
     // rather than nulling it (which would silently drop mae/mfe-dependent flags). But ONLY when the
-    // excursion INPUTS are unchanged. The fills are those inputs — they fix the window, the avgEntry
-    // reference, and the price anchors — so an identical fill set is the exact condition. Any gained
-    // fill (open → closed, a scale-in/out, or a partial exit that leaves the trade open) shifts the
-    // anchors, so it must recompute, never carry forward. (closeTime/avgEntry/maxQty don't catch a
-    // partial exit on a still-open trade: none of them move.)
+    // excursion INPUTS are unchanged. Those inputs are the fills — they fix the window [openTime,
+    // closeTime], the avgEntry reference, and the price anchors (min/max fill price). We guard on both:
+    //   - the fill-ID SET, so a gained/removed fill (open → closed, scale-in/out, a partial exit that
+    //     leaves the trade open — none of which need move avgEntry/maxQty) forces a recompute; and
+    //   - the derived window/size aggregates, so a raw fill CORRECTED in place (upsertRawFills reuses
+    //     the ID but may change price/qty/time) is caught even though the ID set is identical.
     const priorT = prior.get(t.id);
     const sameInputs =
       priorT !== undefined &&
+      priorT.openTime === t.openTime &&
+      priorT.closeTime === t.closeTime &&
+      priorT.avgEntry === t.avgEntry &&
+      priorT.avgExit === t.avgExit &&
+      priorT.maxQty === t.maxQty &&
       priorT.fillIds.length === t.fillIds.length &&
       priorT.fillIds.every((id, i) => id === t.fillIds[i]);
     const mae = excursion.mae ?? (sameInputs ? priorT.mae : null);
