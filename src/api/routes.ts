@@ -534,9 +534,16 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
         const groups = getHeatmapGroups(db);
         const universe = getThematicUniverse(db);
         const now = deps.now();
-        // ONE fan-out covers the display groups AND the thematic ranking universe (deduped).
+        // ONE fan-out covers the display groups, the thematic ranking universe, AND the RS benchmark
+        // (SPY is always fetched even if the user removed it from every list — the "vs SPY" column
+        // needs it).
+        const BENCHMARK = "US.SPY";
         const uniq = [
-          ...new Set([...groups.flatMap((g) => g.symbols.map((s) => s.symbol)), ...universe.map((s) => s.symbol)]),
+          ...new Set([
+            ...groups.flatMap((g) => g.symbols.map((s) => s.symbol)),
+            ...universe.map((s) => s.symbol),
+            BENCHMARK,
+          ]),
         ];
         const bySymbol = new Map<string, ReturnType<typeof heatmapMetrics>>();
         // Chunked fan-out: parallel enough to load fast, capped so ~30 symbols don't hammer Yahoo.
@@ -553,24 +560,30 @@ export function buildApi(db: Database, deps: ApiDeps): (req: Request) => Promise
             }),
           );
         }
+        // 20-session return relative to SPY, as a ratio-based excess return: (1+r)/(1+rSPY) − 1.
+        // Positive = outperforming the index over the last month of sessions.
+        const spy20 = bySymbol.get(BENCHMARK)?.p20dPct ?? null;
+        const row = ({ symbol, label }: HeatmapSymbol) => {
+          const m = bySymbol.get(symbol)!;
+          const rs20Pct = m.p20dPct !== null && spy20 !== null ? (1 + m.p20dPct) / (1 + spy20) - 1 : null;
+          return { symbol, label, ...m, rs20Pct };
+        };
         // The thematic ranking: FULL universe sorted by 5-day % change, descending — the classic
         // daily-plan "where is money flowing this week" ordering. No-data symbols sink to the
-        // bottom. The client shows the top N and uses the full ranked list in edit mode; the daily
-        // snapshot freezes whatever ranking the user saw.
+        // bottom. The client shows the top N; edit mode uses `universe` (the user's CONFIG order,
+        // related themes adjacent) joined with these rows. The daily snapshot freezes what was seen.
         const thematicRows = universe
-          .map(({ symbol, label }) => ({ symbol, label, ...bySymbol.get(symbol)! }))
+          .map(row)
           .sort((a, b) => (b.p5dPct ?? -Infinity) - (a.p5dPct ?? -Infinity) || a.symbol.localeCompare(b.symbol));
         return json({
           asOf: now,
-          groups: groups.map((g) => ({
-            name: g.name,
-            rows: g.symbols.map(({ symbol, label }) => ({ symbol, label, ...bySymbol.get(symbol)! })),
-          })),
+          groups: groups.map((g) => ({ name: g.name, rows: g.symbols.map(row) })),
           thematic: {
             rankedBy: "p5dPct",
             topN: THEMATIC_TOP_N,
             universeSize: universe.length,
             rows: thematicRows,
+            universe,
           },
         });
       }

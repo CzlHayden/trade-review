@@ -7,24 +7,39 @@ import { dayKeyOf } from "../../src/domain/time";
 
 // Per-column heat scale: the |value| at which the cell tint saturates. Tuned per horizon so a ±1%
 // day reads as loud as a ±10% YTD (their natural magnitudes differ by an order of magnitude).
-const SCALE = { day: 0.03, p5d: 0.06, off52w: 0.25, ytd: 0.3 };
+const SCALE = { day: 0.03, p5d: 0.06, p1m: 0.1, rs20: 0.05, ma20: 0.05, ma50: 0.08, off52w: 0.25, ytd: 0.3 };
 const SYMBOL_RE = /^[A-Z]{2,6}\.[A-Z0-9.\-]{1,15}$/; // mirrors the server's validation
 const REGIMES: MarketRegime[] = ["UPTREND", "CHOP", "DOWNTREND"];
 
-/** Signed percent, 2dp — the sheet-style reading ("+1.38%", "−4.03%"). */
-function spct(v: number | null): string {
-  if (v === null) return "—";
+/** Signed percent, 2dp — the sheet-style reading ("+1.38%", "−4.03%"). Tolerates undefined so a
+ * snapshot frozen before a column existed renders "—", not NaN. */
+function spct(v: number | null | undefined): string {
+  if (v == null) return "—";
   const s = (v * 100).toFixed(2);
   return v > 0 ? `+${s}%` : `${s}%`;
 }
 
+/** Volume ratio ("1.8×"). 1 = a normal day. */
+function xratio(v: number | null | undefined): string {
+  return v == null ? "—" : `${v.toFixed(1)}×`;
+}
+
 /** Cell tint: green/red by sign, opacity by |value| against the column's scale. DOM styles resolve
  * our light-dark() CSS vars natively, so the tint re-themes for free. */
-function heat(v: number | null, scale: number): CSSProperties {
-  if (v === null) return {};
+function heat(v: number | null | undefined, scale: number): CSSProperties {
+  if (v == null) return {};
   const mag = Math.min(Math.abs(v) / scale, 1);
   const color = v >= 0 ? "var(--pos)" : "var(--neg)";
   return { background: `color-mix(in srgb, ${color} ${Math.round(mag * 40)}%, transparent)` };
+}
+
+/** Volume tint: deviation from 1× (a normal day). Elevated volume = attention (green), dried-up =
+ * gray-red. Saturates at ±1.5× away from normal. */
+function heatVol(v: number | null | undefined): CSSProperties {
+  if (v == null) return {};
+  const mag = Math.min(Math.abs(v - 1) / 1.5, 1);
+  const color = v >= 1 ? "var(--pos)" : "var(--neg)";
+  return { background: `color-mix(in srgb, ${color} ${Math.round(mag * 35)}%, transparent)` };
 }
 
 /** "US.XLK" renders as "XLK" (the US prefix is noise in an all-ETF table); other markets keep it. */
@@ -68,6 +83,7 @@ function GroupTable({
   onRemove,
   onAdd,
   onLabel,
+  onMove,
   extraHeader,
   showRank,
 }: {
@@ -77,6 +93,7 @@ function GroupTable({
   onRemove?: (symbol: string) => void;
   onAdd?: (symbol: string, label: string | null) => void;
   onLabel?: (symbol: string, label: string) => void;
+  onMove?: (symbol: string, dir: -1 | 1) => void; // ↑/↓ a ticker within its list while editing
   extraHeader?: ReactNode; // e.g. the ↑/↓ group-reorder buttons while editing
   showRank?: boolean; // "#" column for ranked lists (the thematic top-10)
 }) {
@@ -129,9 +146,17 @@ function GroupTable({
               {showRank && <th className="right">#</th>}
               <th>Symbol</th>
               <th>Industry</th>
-              <th className="right">Last</th>
               <th className="right" title="Latest close vs the previous session's close">% Day</th>
               <th className="right" title="Latest close vs the close 5 sessions earlier">% 5D</th>
+              <th className="right" title="Latest close vs the close 21 sessions (~1 calendar month) earlier">% 1M</th>
+              <th className="right" title="20-session return relative to SPY ((1+r)÷(1+rSPY)−1). Positive = outperforming the index — the emerging-leadership tell">
+                vs SPY 20d
+              </th>
+              <th className="right" title="Latest close vs its 20-session moving average — short-term trend position">vs 20DMA</th>
+              <th className="right" title="Latest close vs its 50-session moving average — intermediate trend position">vs 50DMA</th>
+              <th className="right" title="Latest session's volume vs the average of the prior 20 sessions. >1× = elevated participation">
+                Vol/20d
+              </th>
               <th className="right" title="Latest close vs the highest intraday high of the trailing 52 weeks (0% = at highs)">
                 % Off 52-wk high
               </th>
@@ -141,7 +166,7 @@ function GroupTable({
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={showRank ? 8 : 7} className="empty">
+                <td colSpan={showRank ? 12 : 11} className="empty">
                   No symbols — use Edit lists to add some.
                 </td>
               </tr>
@@ -156,12 +181,24 @@ function GroupTable({
                       no data
                     </span>
                   )}
+                  {editing && onMove && (
+                    <span style={{ display: "inline-flex", gap: 2, marginLeft: 6 }}>
+                      <button type="button" className="btn btn-icon" title="Move up" disabled={i === 0}
+                        style={{ padding: "0 5px", fontSize: 10 }} onClick={() => onMove(r.symbol, -1)}>
+                        ▲
+                      </button>
+                      <button type="button" className="btn btn-icon" title="Move down" disabled={i === rows.length - 1}
+                        style={{ padding: "0 5px", fontSize: 10 }} onClick={() => onMove(r.symbol, 1)}>
+                        ▼
+                      </button>
+                    </span>
+                  )}
                   {editing && onRemove && (
                     <button
                       type="button"
                       className="btn btn-icon"
                       aria-label={`remove ${r.symbol}`}
-                      style={{ marginLeft: 6, padding: "0 6px", fontSize: 11 }}
+                      style={{ marginLeft: 4, padding: "0 6px", fontSize: 11 }}
                       onClick={() => onRemove(r.symbol)}
                     >
                       ✕
@@ -169,9 +206,13 @@ function GroupTable({
                   )}
                 </td>
                 <LabelCell row={r} editing={editing && !!onLabel} onLabel={(l) => onLabel?.(r.symbol, l)} />
-                <td className="right num">{r.last !== null ? r.last.toFixed(2) : "—"}</td>
                 <td className="right num" style={heat(r.dayPct, SCALE.day)}>{spct(r.dayPct)}</td>
                 <td className="right num" style={heat(r.p5dPct, SCALE.p5d)}>{spct(r.p5dPct)}</td>
+                <td className="right num" style={heat(r.p1mPct, SCALE.p1m)}>{spct(r.p1mPct)}</td>
+                <td className="right num" style={heat(r.rs20Pct, SCALE.rs20)}>{spct(r.rs20Pct)}</td>
+                <td className="right num" style={heat(r.ma20Pct, SCALE.ma20)}>{spct(r.ma20Pct)}</td>
+                <td className="right num" style={heat(r.ma50Pct, SCALE.ma50)}>{spct(r.ma50Pct)}</td>
+                <td className="right num" style={heatVol(r.volVs20d)}>{xratio(r.volVs20d)}</td>
                 <td className="right num" style={heat(r.off52wPct, SCALE.off52w)}>{spct(r.off52wPct)}</td>
                 <td className="right num" style={heat(r.ytdPct, SCALE.ytd)}>{spct(r.ytdPct)}</td>
               </tr>
@@ -275,6 +316,19 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
         i === gi ? { ...g, symbols: g.symbols.map((s) => (s.symbol === symbol ? { ...s, label: lbl || null } : s)) } : g,
       ),
     );
+  /** Swap a symbol with its neighbor inside `list`; null when it can't move further. */
+  const swapped = <T extends { symbol: string }>(list: T[], symbol: string, dir: -1 | 1): T[] | null => {
+    const i = list.findIndex((s) => s.symbol === symbol);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= list.length) return null;
+    const next = list.slice();
+    [next[i], next[j]] = [next[j]!, next[i]!];
+    return next;
+  };
+  const moveSymbol = (gi: number, symbol: string, dir: -1 | 1) => {
+    const next = swapped(liveGroups[gi]!.symbols, symbol, dir);
+    if (next) putGroups.mutate(liveGroups.map((g, i) => (i === gi ? { ...g, symbols: next } : g)));
+  };
   const addGroup = () => {
     const name = newGroup.trim();
     if (!name || liveGroups.some((g) => g.name === name)) return;
@@ -427,6 +481,7 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
                   onRemove={(s) => removeSymbol(gi, s)}
                   onAdd={(s, l) => addSymbol(gi, s, l)}
                   onLabel={(s, l) => setLabel(gi, s, l)}
+                  onMove={(s, d) => moveSymbol(gi, s, d)}
                   extraHeader={
                     editing ? (
                       <span style={{ display: "inline-flex", gap: 2 }}>
@@ -469,16 +524,20 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
             {heatQ.data?.thematic &&
               (() => {
                 const th = heatQ.data.thematic;
-                // Display: the top N. Edit mode: the WHOLE ranked universe, so you can see what's
-                // just outside the cut and prune/label the candidate list itself.
-                const rows = editing ? th.rows : th.rows.slice(0, th.topN);
-                const entries = th.rows.map((r) => ({ symbol: r.symbol, label: r.label }));
+                // Display: the top N, RANKED by 5-day change. Edit mode: the whole universe in the
+                // user's CONFIG order (related narratives adjacent) — reorder there with ▲▼; press
+                // Done editing and the view snaps back to the ranking.
+                const entries = th.universe ?? th.rows.map((r) => ({ symbol: r.symbol, label: r.label }));
+                const bySym = new Map(th.rows.map((r) => [r.symbol, r]));
+                const rows = editing
+                  ? entries.map((e) => bySym.get(e.symbol)).filter((r): r is HeatmapRow => r !== undefined)
+                  : th.rows.slice(0, th.topN);
                 return (
                   <GroupTable
                     name={editing ? `Thematic universe (${th.universeSize} tracked)` : `Top ${th.topN} thematic`}
                     rows={rows}
                     editing={editing}
-                    showRank
+                    showRank={!editing}
                     onRemove={(s) => putThematic.mutate(entries.filter((e) => e.symbol !== s))}
                     onAdd={(s, l) => {
                       if (!entries.some((e) => e.symbol === s)) putThematic.mutate([...entries, { symbol: s, label: l }]);
@@ -486,10 +545,15 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
                     onLabel={(s, l) =>
                       putThematic.mutate(entries.map((e) => (e.symbol === s ? { ...e, label: l || null } : e)))
                     }
+                    onMove={(s, d) => {
+                      const next = swapped(entries, s, d);
+                      if (next) putThematic.mutate(next);
+                    }}
                     extraHeader={
                       <span className="faint" style={{ fontSize: 11, fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
-                        ranked by 5-day % change · re-sorts itself daily
-                        {editing ? " · top 10 shown outside editing" : ` · tracking ${th.universeSize}`}
+                        {editing
+                          ? "your order (group related themes) · display re-ranks by 5-day % on Done"
+                          : `ranked by 5-day % change · re-sorts itself daily · tracking ${th.universeSize}`}
                       </span>
                     }
                   />

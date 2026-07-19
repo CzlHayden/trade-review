@@ -2,6 +2,7 @@ import { useStats, useTrades, useTheme } from "../lib/hooks";
 import { Kpis } from "../components/Kpis";
 import { EquityChart } from "../components/EquityChart";
 import { BreakdownTable } from "../components/BreakdownTable";
+import { MistakeCosts } from "../components/MistakeCosts";
 import { TradesTable } from "../components/TradesTable";
 
 export function Dashboard() {
@@ -49,6 +50,9 @@ export function Dashboard() {
 
       <div className="section-title">Find my edge</div>
       <BreakdownTable />
+
+      <div className="section-title">Cost of mistakes</div>
+      {trades.isLoading ? <div className="spinner">Loading…</div> : <MistakeCosts rows={trades.data ?? []} />}
 
       <div className="section-title">Flagged trades ({flagged.length})</div>
       {trades.isLoading ? (

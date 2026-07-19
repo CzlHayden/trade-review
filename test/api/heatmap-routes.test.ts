@@ -126,6 +126,36 @@ test("heatmap ranks the thematic universe by 5-day change desc, no-data last", a
   expect(body.thematic.rows[2].p5dPct).toBeNull();
 });
 
+test("rs20Pct is the 20-session return vs SPY; SPY is fetched even when it's in no list", async () => {
+  const DAY = 86_400_000;
+  const series = (lastClose: number): Candle[] =>
+    Array.from({ length: 22 }, (_, i) => {
+      const close = i === 21 ? lastClose : 100;
+      return { time: NOW - (21 - i) * DAY, open: close, high: close, low: close, close, volume: 0 };
+    });
+  const fetched: string[] = [];
+  const { app } = harness(async (symbol) => {
+    fetched.push(symbol);
+    if (symbol === "US.SPY") return series(110); // +10% over 20 sessions
+    return series(120); // +20%
+  });
+  await app(
+    new Request("http://x/api/market/symbols", {
+      method: "PUT",
+      body: JSON.stringify({ groups: [{ name: "G", symbols: ["US.GRW"] }] }),
+    }),
+  );
+  await app(
+    new Request("http://x/api/market/thematic", { method: "PUT", body: JSON.stringify({ symbols: ["US.GRW"] }) }),
+  );
+  const body: any = await (await app(new Request("http://x/api/market/heatmap"))).json();
+  expect(fetched).toContain("US.SPY"); // the benchmark rides along regardless of the lists
+  expect(body.groups[0].rows[0].rs20Pct).toBeCloseTo(1.2 / 1.1 - 1, 10);
+  expect(body.thematic.rows[0].rs20Pct).toBeCloseTo(1.2 / 1.1 - 1, 10);
+  // and the config-order universe travels with the ranking for the edit view
+  expect(body.thematic.universe).toEqual([{ symbol: "US.GRW", label: null }]);
+});
+
 test("PUT /api/market/thematic validates entries", async () => {
   const { app } = harness(async () => []);
   const bad = async (symbols: unknown) =>

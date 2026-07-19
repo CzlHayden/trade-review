@@ -163,41 +163,75 @@ export const DEFAULT_HEATMAP_GROUPS: HeatmapGroup[] = [
 
 const THEMATIC_KEY = "thematic_universe";
 
+// Ordered by NARRATIVE, related themes adjacent — so scanning the list in edit mode reads like a
+// map of the market: AI/tech → crypto → health → defense → industrials → housing/consumer →
+// financials → traditional energy → new energy → metals → agriculture → international → rates/RE.
 export const DEFAULT_THEMATIC_UNIVERSE: HeatmapSymbol[] = [
+  // — AI & tech
   ["US.SMH", "Semiconductors"],
   ["US.IGV", "Software"],
+  ["US.SKYY", "Cloud Computing"],
   ["US.HACK", "Cybersecurity"],
+  ["US.FDN", "Internet"],
+  ["US.BOTZ", "Robotics & AI"],
   ["US.ARKK", "Innovation"],
+  // — crypto
+  ["US.BITO", "Bitcoin Futures"],
+  ["US.BLOK", "Blockchain"],
+  // — health
   ["US.IBB", "Biotech"],
   ["US.XBI", "Biotech (equal weight)"],
+  ["US.ARKG", "Genomics"],
+  ["US.IHI", "Medical Devices"],
+  // — defense & space
   ["US.ITA", "Aerospace & Defense"],
+  ["US.XAR", "Aerospace (equal weight)"],
+  // — industrials & transport
+  ["US.PAVE", "Infrastructure"],
+  ["US.IYT", "Transports"],
   ["US.JETS", "Airlines"],
+  // — housing & consumer
   ["US.ITB", "Home Construction"],
   ["US.XRT", "Retail"],
+  // — financials
   ["US.KRE", "Regional Banks"],
   ["US.KBE", "Banks"],
+  ["US.IAI", "Broker-Dealers & Exchanges"],
+  // — traditional energy
+  ["US.XOP", "Oil & Gas Exploration"],
+  ["US.OIH", "Oil Services"],
+  ["US.FCG", "Natural Gas Stocks"],
+  ["US.USO", "Oil (WTI)"],
+  ["US.UNG", "Natural Gas"],
+  // — new energy
+  ["US.TAN", "Solar"],
+  ["US.ICLN", "Clean Energy"],
+  ["US.URA", "Uranium"],
+  ["US.LIT", "Lithium & Battery"],
+  // — metals
+  ["US.GLD", "Gold"],
+  ["US.SLV", "Silver"],
+  ["US.GDX", "Gold Miners"],
+  ["US.SIL", "Silver Miners"],
+  ["US.COPX", "Copper Miners"],
+  ["US.XME", "Metals & Mining"],
+  ["US.REMX", "Rare Earths"],
+  // — agriculture & commodities
+  ["US.DBA", "Agriculture"],
+  ["US.MOO", "Agribusiness"],
+  ["US.WEAT", "Wheat"],
+  ["US.CORN", "Corn"],
+  ["US.DBC", "Commodities Index"],
+  // — international
   ["US.KWEB", "China Internet"],
   ["US.FXI", "China Large-Cap"],
   ["US.EEM", "Emerging Markets"],
-  ["US.XOP", "Oil & Gas Exploration"],
-  ["US.OIH", "Oil Services"],
-  ["US.USO", "Oil (WTI)"],
-  ["US.UNG", "Natural Gas"],
-  ["US.XME", "Metals & Mining"],
-  ["US.GDX", "Gold Miners"],
-  ["US.GLD", "Gold"],
-  ["US.SLV", "Silver"],
-  ["US.COPX", "Copper Miners"],
-  ["US.URA", "Uranium"],
-  ["US.TAN", "Solar"],
-  ["US.LIT", "Lithium & Battery"],
-  ["US.DBA", "Agriculture"],
-  ["US.WEAT", "Wheat"],
-  ["US.DBC", "Commodities Index"],
-  ["US.IXC", "Global Energy"],
-  ["US.IYR", "US Real Estate"],
+  ["US.EWZ", "Brazil"],
+  ["US.INDA", "India"],
+  ["US.EWJ", "Japan"],
+  // — rates & real estate
   ["US.TLT", "20+ yr Treasuries"],
-  ["US.BITO", "Bitcoin Futures"],
+  ["US.IYR", "US Real Estate"],
 ].map(([symbol, label]) => ({ symbol: symbol as string, label: label as string }));
 
 /** Known industry labels from the default groups AND the thematic universe, used to BACKFILL a

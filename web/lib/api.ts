@@ -51,6 +51,12 @@ export interface HeatmapRow {
   last: number | null;
   dayPct: number | null;
   p5dPct: number | null;
+  p20dPct?: number | null; // 20-session return (RS ingredient); optional: pre-feature snapshots lack it
+  p1mPct?: number | null; // ~21-session "1-month" return
+  rs20Pct?: number | null; // 20-session return vs SPY, ratio-based excess
+  ma20Pct?: number | null; // close vs 20-session SMA
+  ma50Pct?: number | null; // close vs 50-session SMA
+  volVs20d?: number | null; // latest volume ÷ prior-20-session average (ratio, 1 = normal)
   off52wPct: number | null; // ≤ 0: distance below the trailing-52-week high
   ytdPct: number | null;
 }
@@ -65,6 +71,9 @@ export interface ThematicRanking {
   topN: number;
   universeSize: number;
   rows: HeatmapRow[];
+  // The user's CONFIG order (related narratives adjacent) — what edit mode shows and reorders.
+  // Optional: snapshots frozen before this feature don't carry it.
+  universe?: HeatmapSymbolEntry[];
 }
 export interface HeatmapResponse {
   asOf: number;

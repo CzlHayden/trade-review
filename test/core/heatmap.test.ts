@@ -18,7 +18,43 @@ function flatSeries(end: number, n: number, close: number): Candle[] {
 
 describe("heatmapMetrics", () => {
   test("empty series → all nulls", () => {
-    expect(heatmapMetrics([])).toEqual({ last: null, dayPct: null, p5dPct: null, off52wPct: null, ytdPct: null });
+    expect(heatmapMetrics([])).toEqual({
+      last: null, dayPct: null, p5dPct: null, p20dPct: null, p1mPct: null,
+      ma20Pct: null, ma50Pct: null, volVs20d: null, off52wPct: null, ytdPct: null,
+    });
+  });
+
+  test("20d / 1-month returns use sessions; short series → null", () => {
+    const end = Date.UTC(2026, 6, 17);
+    const bars = flatSeries(end, 22, 100);
+    bars[0] = bar(end - 21 * DAY, 80); // 21 sessions back → the 1M baseline
+    bars[1] = bar(end - 20 * DAY, 90); // 20 sessions back → the 20d baseline
+    bars[bars.length - 1] = bar(end, 108);
+    const m = heatmapMetrics(bars);
+    expect(m.p20dPct).toBeCloseTo(108 / 90 - 1, 10);
+    expect(m.p1mPct).toBeCloseTo(108 / 80 - 1, 10);
+    const short = heatmapMetrics(flatSeries(end, 10, 100));
+    expect(short.p20dPct).toBeNull();
+    expect(short.p1mPct).toBeNull();
+  });
+
+  test("distance from the 20/50-session SMAs needs a full window", () => {
+    const end = Date.UTC(2026, 6, 17);
+    const bars = flatSeries(end, 20, 100);
+    bars[bars.length - 1] = bar(end, 110); // 19×100 + 110 → SMA20 = 100.5
+    const m = heatmapMetrics(bars);
+    expect(m.ma20Pct).toBeCloseTo(110 / 100.5 - 1, 10);
+    expect(m.ma50Pct).toBeNull(); // only 20 bars — no honest 50-SMA
+  });
+
+  test("volume vs 20d averages the PRIOR 20 sessions, excluding today's spike", () => {
+    const end = Date.UTC(2026, 6, 17);
+    const bars = flatSeries(end, 21, 100).map((b, i, all) => ({
+      ...b,
+      volume: i === all.length - 1 ? 3000 : 1000,
+    }));
+    expect(heatmapMetrics(bars).volVs20d).toBeCloseTo(3, 10); // 3000 vs avg 1000 — measured against normal days
+    expect(heatmapMetrics(bars.slice(1)).volVs20d).toBeNull(); // 20 bars → only 19 prior — not a full window
   });
 
   test("single bar → last only; every % lacks a baseline", () => {
