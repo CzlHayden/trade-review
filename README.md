@@ -32,7 +32,7 @@ history — it never has your FUTU password.
 
 ### 2. Install Trade Review
 
-Download the file for your computer from the **[Releases page](https://github.com/CzlHayden/trade-review/releases)**:
+Download the file for your computer from the **[Releases page](https://github.com/keithzrc/trade-review/releases)**:
 
 | Your computer | Download | First launch |
 | --- | --- | --- |
