@@ -163,74 +163,98 @@ export const DEFAULT_HEATMAP_GROUPS: HeatmapGroup[] = [
 
 const THEMATIC_KEY = "thematic_universe";
 
-// Ordered by NARRATIVE, related themes adjacent — so scanning the list in edit mode reads like a
-// map of the market: AI/tech → crypto → health → defense → industrials → housing/consumer →
-// financials → traditional energy → new energy → metals → agriculture → international → rates/RE.
+// Ordered by NARRATIVE, related themes adjacent (the user's curated map of the market): AI & digital
+// infrastructure → crypto → healthcare → defense & space → industrials & transportation → housing &
+// consumer → financials → traditional energy → power & new energy → metals & materials →
+// agriculture & natural resources → international → rates & real estate.
 export const DEFAULT_THEMATIC_UNIVERSE: HeatmapSymbol[] = [
-  // — AI & tech
+  // — AI & Digital Infrastructure
   ["US.SMH", "Semiconductors"],
   ["US.IGV", "Software"],
   ["US.SKYY", "Cloud Computing"],
   ["US.HACK", "Cybersecurity"],
-  ["US.FDN", "Internet"],
-  ["US.BOTZ", "Robotics & AI"],
-  ["US.ARKK", "Innovation"],
-  // — crypto
-  ["US.BITO", "Bitcoin Futures"],
-  ["US.BLOK", "Blockchain"],
-  // — health
-  ["US.IBB", "Biotech"],
-  ["US.XBI", "Biotech (equal weight)"],
-  ["US.ARKG", "Genomics"],
+  ["US.FDN", "Internet Platforms"],
+  ["US.AIQ", "Artificial Intelligence & Big Data"],
+  ["US.BOTZ", "Robotics & Artificial Intelligence"],
+  ["US.DTCR", "Data Centers & Digital Infrastructure"],
+  ["US.QTUM", "Quantum Computing & Machine Learning"],
+  // — Crypto & Blockchain
+  ["US.IBIT", "Bitcoin"],
+  ["US.ETHA", "Ethereum"],
+  ["US.BLOK", "Blockchain & Crypto Equities"],
+  // — Healthcare
+  ["US.XLV", "Broad Healthcare"],
+  ["US.IBB", "Large-Cap Biotechnology"],
+  ["US.XBI", "Biotechnology - Equal Weight"],
+  ["US.ARKG", "Genomics & Gene Technology"],
   ["US.IHI", "Medical Devices"],
-  // — defense & space
-  ["US.ITA", "Aerospace & Defense"],
-  ["US.XAR", "Aerospace (equal weight)"],
-  // — industrials & transport
-  ["US.PAVE", "Infrastructure"],
-  ["US.IYT", "Transports"],
+  ["US.IHF", "Healthcare Providers & Insurers"],
+  // — Defense & Space
+  ["US.XAR", "Aerospace & Defense - Equal Weight"],
+  ["US.SHLD", "Defense Technology"],
+  ["US.UFO", "Space Economy & Satellites"],
+  // — Industrials & Transportation
+  ["US.XLI", "Broad Industrials"],
+  ["US.PAVE", "US Infrastructure"],
+  ["US.AIRR", "US Industrial Renaissance & Reshoring"],
+  ["US.IYT", "Transportation"],
   ["US.JETS", "Airlines"],
-  // — housing & consumer
+  ["US.BOAT", "Global Maritime Shipping"],
+  // — Housing & Consumer
   ["US.ITB", "Home Construction"],
   ["US.XRT", "Retail"],
-  // — financials
+  ["US.XLY", "Consumer Discretionary"],
+  ["US.XLP", "Consumer Staples"],
+  // — Financials
+  ["US.XLF", "Broad Financials"],
   ["US.KRE", "Regional Banks"],
-  ["US.KBE", "Banks"],
-  ["US.IAI", "Broker-Dealers & Exchanges"],
-  // — traditional energy
-  ["US.XOP", "Oil & Gas Exploration"],
+  ["US.IAI", "Broker-Dealers & Securities Exchanges"],
+  ["US.FINX", "Financial Technology"],
+  ["US.KIE", "Insurance"],
+  // — Traditional Energy
+  ["US.XLE", "Broad Energy"],
+  ["US.XOP", "Oil & Gas Exploration and Production"],
   ["US.OIH", "Oil Services"],
-  ["US.FCG", "Natural Gas Stocks"],
-  ["US.USO", "Oil (WTI)"],
+  ["US.FCG", "Natural Gas Producers"],
+  ["US.USO", "Crude Oil"],
   ["US.UNG", "Natural Gas"],
-  // — new energy
-  ["US.TAN", "Solar"],
-  ["US.ICLN", "Clean Energy"],
-  ["US.URA", "Uranium"],
-  ["US.LIT", "Lithium & Battery"],
-  // — metals
+  // — Power & New Energy
+  ["US.XLU", "Utilities"],
+  ["US.ZAP", "US Electrification"],
+  ["US.GRID", "Smart Grid Infrastructure"],
+  ["US.URA", "Uranium & Nuclear Components"],
+  ["US.NLR", "Nuclear Energy Ecosystem"],
+  ["US.TAN", "Solar Energy"],
+  ["US.LIT", "Lithium & Battery Technology"],
+  ["US.DRIV", "Electric & Autonomous Vehicles"],
+  // — Metals & Materials
+  ["US.XLB", "Broad Materials"],
   ["US.GLD", "Gold"],
   ["US.SLV", "Silver"],
   ["US.GDX", "Gold Miners"],
   ["US.SIL", "Silver Miners"],
   ["US.COPX", "Copper Miners"],
   ["US.XME", "Metals & Mining"],
-  ["US.REMX", "Rare Earths"],
-  // — agriculture & commodities
-  ["US.DBA", "Agriculture"],
+  ["US.REMX", "Rare Earths & Strategic Metals"],
+  // — Agriculture & Natural Resources
+  ["US.DBC", "Broad Commodities"],
+  ["US.DBA", "Agricultural Commodities"],
   ["US.MOO", "Agribusiness"],
   ["US.WEAT", "Wheat"],
   ["US.CORN", "Corn"],
-  ["US.DBC", "Commodities Index"],
-  // — international
+  ["US.PHO", "Water Resources & Infrastructure"],
+  ["US.WOOD", "Timber & Forestry"],
+  // — International Markets
   ["US.KWEB", "China Internet"],
   ["US.FXI", "China Large-Cap"],
   ["US.EEM", "Emerging Markets"],
   ["US.EWZ", "Brazil"],
   ["US.INDA", "India"],
   ["US.EWJ", "Japan"],
-  // — rates & real estate
-  ["US.TLT", "20+ yr Treasuries"],
+  ["US.EWT", "Taiwan"],
+  ["US.EWY", "South Korea"],
+  // — Rates & Real Estate
+  ["US.TLT", "20+ Year US Treasuries"],
   ["US.IYR", "US Real Estate"],
 ].map(([symbol, label]) => ({ symbol: symbol as string, label: label as string }));
 

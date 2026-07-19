@@ -56,7 +56,17 @@ function normalizeSymbol(raw: string): string {
 /** The label cell: plain text normally; in edit mode an input that commits on Enter/blur, so the
  * industry beside a ticker can be renamed in place (keyed by symbol+label to reset after a save). */
 function LabelCell({ row, editing, onLabel }: { row: HeatmapRow; editing: boolean; onLabel: (label: string) => void }) {
-  if (!editing) return <td className="muted">{row.label ?? ""}</td>;
+  if (!editing)
+    return (
+      // Ellipsized so a long industry name can't force the table into horizontal scroll; full text on hover.
+      <td
+        className="muted"
+        title={row.label ?? undefined}
+        style={{ maxWidth: 170, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+      >
+        {row.label ?? ""}
+      </td>
+    );
   return (
     <td>
       <input
@@ -86,6 +96,7 @@ function GroupTable({
   onMove,
   extraHeader,
   showRank,
+  metrics = "basic",
 }: {
   name: string;
   rows: HeatmapRow[];
@@ -96,6 +107,7 @@ function GroupTable({
   onMove?: (symbol: string, dir: -1 | 1) => void; // ↑/↓ a ticker within its list while editing
   extraHeader?: ReactNode; // e.g. the ↑/↓ group-reorder buttons while editing
   showRank?: boolean; // "#" column for ranked lists (the thematic top-10)
+  metrics?: "basic" | "full"; // basic (index/sector groups): Day/5D/52w/YTD. full (thematic): + momentum set
 }) {
   const [draftSym, setDraftSym] = useState("");
   const [draftLabel, setDraftLabel] = useState("");
@@ -140,7 +152,7 @@ function GroupTable({
         )}
       </div>
       <div className="table-wrap">
-        <table className="data">
+        <table className="data dense">
           <thead>
             <tr>
               {showRank && <th className="right">#</th>}
@@ -148,17 +160,21 @@ function GroupTable({
               <th>Industry</th>
               <th className="right" title="Latest close vs the previous session's close">% Day</th>
               <th className="right" title="Latest close vs the close 5 sessions earlier">% 5D</th>
-              <th className="right" title="Latest close vs the close 21 sessions (~1 calendar month) earlier">% 1M</th>
-              <th className="right" title="20-session return relative to SPY ((1+r)÷(1+rSPY)−1). Positive = outperforming the index — the emerging-leadership tell">
-                vs SPY 20d
-              </th>
-              <th className="right" title="Latest close vs its 20-session moving average — short-term trend position">vs 20DMA</th>
-              <th className="right" title="Latest close vs its 50-session moving average — intermediate trend position">vs 50DMA</th>
-              <th className="right" title="Latest session's volume vs the average of the prior 20 sessions. >1× = elevated participation">
-                Vol/20d
-              </th>
+              {metrics === "full" && (
+                <>
+                  <th className="right" title="Latest close vs the close 21 sessions (~1 calendar month) earlier">% 1M</th>
+                  <th className="right" title="20-session return relative to SPY ((1+r)÷(1+rSPY)−1). Positive = outperforming the index — the emerging-leadership tell">
+                    vs SPY
+                  </th>
+                  <th className="right" title="Latest close vs its 20-session moving average — short-term trend position">20DMA</th>
+                  <th className="right" title="Latest close vs its 50-session moving average — intermediate trend position">50DMA</th>
+                  <th className="right" title="Latest session's volume vs the average of the prior 20 sessions. >1× = elevated participation">
+                    Vol×
+                  </th>
+                </>
+              )}
               <th className="right" title="Latest close vs the highest intraday high of the trailing 52 weeks (0% = at highs)">
-                % Off 52-wk high
+                % 52w
               </th>
               <th className="right" title="Latest close vs the final close of the previous calendar year">% YTD</th>
             </tr>
@@ -166,7 +182,7 @@ function GroupTable({
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={showRank ? 12 : 11} className="empty">
+                <td colSpan={(showRank ? 1 : 0) + (metrics === "full" ? 11 : 6)} className="empty">
                   No symbols — use Edit lists to add some.
                 </td>
               </tr>
@@ -208,11 +224,15 @@ function GroupTable({
                 <LabelCell row={r} editing={editing && !!onLabel} onLabel={(l) => onLabel?.(r.symbol, l)} />
                 <td className="right num" style={heat(r.dayPct, SCALE.day)}>{spct(r.dayPct)}</td>
                 <td className="right num" style={heat(r.p5dPct, SCALE.p5d)}>{spct(r.p5dPct)}</td>
-                <td className="right num" style={heat(r.p1mPct, SCALE.p1m)}>{spct(r.p1mPct)}</td>
-                <td className="right num" style={heat(r.rs20Pct, SCALE.rs20)}>{spct(r.rs20Pct)}</td>
-                <td className="right num" style={heat(r.ma20Pct, SCALE.ma20)}>{spct(r.ma20Pct)}</td>
-                <td className="right num" style={heat(r.ma50Pct, SCALE.ma50)}>{spct(r.ma50Pct)}</td>
-                <td className="right num" style={heatVol(r.volVs20d)}>{xratio(r.volVs20d)}</td>
+                {metrics === "full" && (
+                  <>
+                    <td className="right num" style={heat(r.p1mPct, SCALE.p1m)}>{spct(r.p1mPct)}</td>
+                    <td className="right num" style={heat(r.rs20Pct, SCALE.rs20)}>{spct(r.rs20Pct)}</td>
+                    <td className="right num" style={heat(r.ma20Pct, SCALE.ma20)}>{spct(r.ma20Pct)}</td>
+                    <td className="right num" style={heat(r.ma50Pct, SCALE.ma50)}>{spct(r.ma50Pct)}</td>
+                    <td className="right num" style={heatVol(r.volVs20d)}>{xratio(r.volVs20d)}</td>
+                  </>
+                )}
                 <td className="right num" style={heat(r.off52wPct, SCALE.off52w)}>{spct(r.off52wPct)}</td>
                 <td className="right num" style={heat(r.ytdPct, SCALE.ytd)}>{spct(r.ytdPct)}</td>
               </tr>
@@ -538,6 +558,7 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
                     rows={rows}
                     editing={editing}
                     showRank={!editing}
+                    metrics="full"
                     onRemove={(s) => putThematic.mutate(entries.filter((e) => e.symbol !== s))}
                     onAdd={(s, l) => {
                       if (!entries.some((e) => e.symbol === s)) putThematic.mutate([...entries, { symbol: s, label: l }]);
@@ -574,6 +595,7 @@ function DayBody({ dayKey, isToday }: { dayKey: string; isToday: boolean }) {
                 rows={day.data.snapshot.thematic.rows.slice(0, day.data.snapshot.thematic.topN)}
                 editing={false}
                 showRank
+                metrics="full"
               />
             )}
           </>
